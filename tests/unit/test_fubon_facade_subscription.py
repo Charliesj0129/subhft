@@ -198,3 +198,37 @@ def test_forced_reconnect_before_subscribe_basket_keeps_live_session(quote_rt: M
     assert facade.reconnect("session_rollover", force=True) is False
     session.reconnect.assert_not_called()
     quote_rt.subscribe.assert_not_called()
+
+
+def test_reconnect_recovers_after_the_first_subscribe_failed(
+    monkeypatch: pytest.MonkeyPatch, quote_rt: MagicMock
+) -> None:
+    # A first subscribe that raises must not leave the feed dead until restart: the monitor's
+    # reconnect should subscribe the basket and start the session-flag loop.
+    monkeypatch.setenv("HFT_SYMBOLS", "TXFL6")
+    quote_rt.subscribe.side_effect = [RuntimeError("subscribe refused"), None]
+    facade = _facade()
+    with pytest.raises(RuntimeError, match="subscribe refused"):
+        facade.subscribe_basket(_cb)
+    _session_relogin_ok(facade)
+    assert facade.reconnect("recovering") is True
+    quote_rt.subscribe.assert_called_with(["TXFL6"], after_hours=False)
+    assert facade._subscription_manager._session_thread is not None
+
+
+def test_reconnect_resubscribes_on_the_new_manager_after_a_failed_second_subscribe(
+    monkeypatch: pytest.MonkeyPatch, quote_rt: MagicMock
+) -> None:
+    # The manager a failed subscribe_basket built must replace the closed one, or reconnect
+    # would ask the closed manager to resubscribe and be refused.
+    monkeypatch.setenv("HFT_SYMBOLS", "TXFL6")
+    facade = _facade()
+    facade.subscribe_basket(_cb)
+    quote_rt.subscribe.side_effect = RuntimeError("subscribe refused")
+    with pytest.raises(RuntimeError, match="subscribe refused"):
+        facade.subscribe_basket(_cb)
+    quote_rt.subscribe.side_effect = None
+    _session_relogin_ok(facade)
+    quote_rt.reset_mock()
+    assert facade.reconnect("recovering") is True
+    quote_rt.subscribe.assert_called_once_with(["TXFL6"], after_hours=False)

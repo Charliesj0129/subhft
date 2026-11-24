@@ -177,6 +177,8 @@ class FubonSubscriptionManager:
             self._quote_runtime.subscribe(codes, after_hours=self._after_hours)
             self._subscribed_codes = set(codes)
         self._quote_runtime.start_quote_watchdog()
+        # A first subscribe that raised never started the session-flag loop: start it here too.
+        self._start_session_loop()
         self._last_resubscribe_ts = time.monotonic()
 
         self.log.info(

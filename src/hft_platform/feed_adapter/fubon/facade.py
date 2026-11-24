@@ -321,9 +321,10 @@ class FubonClientFacade:
         manager = self._subscription_manager
         if manager is None:
             # Nothing was subscribed, so there is nothing to restore. Log in only when the session
-            # is down (orders need it). force is not honored here: the monitor keeps a rollover
-            # reconnect pending until one returns True, so a forced relogin would repeat every
-            # reconnect cooldown. Success is never reported: CONNECTED means the basket is subscribed.
+            # is down (orders need it). A forced reconnect does not relogin while the session is up:
+            # the monitor keeps a rollover reconnect pending until one returns True, so a forced
+            # relogin on every attempt would repeat each reconnect cooldown. Success is never
+            # reported: CONNECTED means the basket is subscribed.
             if not self._session_runtime.is_logged_in and self._session_runtime.reconnect(reason=reason, force=force):
                 self._bind_session()
             return False
@@ -354,8 +355,10 @@ class FubonClientFacade:
             self._subscription_manager.close()
         # The lambda reads _session_clock on each call, so a pinned clock takes effect.
         manager = FubonSubscriptionManager(self._quote_runtime, codes, session_clock=lambda: _session_clock())
-        manager.subscribe_basket(cb)
+        # Keep the manager even if its first subscribe raises: reconnect() resubscribes
+        # through it, so a failed first subscribe is recovered without a restart.
         self._subscription_manager = manager
+        manager.subscribe_basket(cb)
 
     def fetch_snapshots(self) -> list[Any]:
         return []
