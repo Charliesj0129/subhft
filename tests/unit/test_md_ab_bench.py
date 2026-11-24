@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -451,3 +452,16 @@ def test_summarize_command_prints_the_verdict_and_maps_it_to_the_exit_code(bench
             (folder / f"r{i}.json").write_text(json.dumps(record), encoding="utf-8")
         assert bench.main(["summarize", "--in-dir", str(folder)]) == code
         assert verdict in capsys.readouterr().out
+
+
+def test_run_once_with_sharded_workers_reports_conserved_counts(bench, tmp_path):
+    """Regression: the sharded arm crashed on a counter P3 removed (ShardWorker.stale_skipped)."""
+    out = tmp_path / "w1.json"
+    args = bench.build_parser().parse_args(
+        ["run", "--workers", "1", "--rate", "200", "--seconds", "0.5", "--symbols", "120", "--out", str(out)]
+    )
+    args.cpus = tuple(sorted(os.sched_getaffinity(0)))
+    result = bench.run_once(args)
+    assert result["workers"] == 1
+    assert result["counts"]["stale"] == 0
+    assert result["counts"]["unaccounted"] == 0
