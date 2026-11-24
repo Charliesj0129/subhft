@@ -10,7 +10,9 @@ using explicit delegation (no ``__getattr__``).
 
 from __future__ import annotations
 
+import datetime as dt
 import os
+import re
 from typing import Any, Callable
 
 import structlog
@@ -22,6 +24,7 @@ from hft_platform.feed_adapter.fubon.execution_callbacks import (
 )
 from hft_platform.feed_adapter.fubon.order_codec import translate_adapter_order_kwargs
 from hft_platform.feed_adapter.fubon.session_runtime import FubonSimSafetyError, build_fubon_sdk
+from hft_platform.feed_adapter.fubon.subscription_manager import FubonSubscriptionManager, taipei_now
 
 # Lazy SDK import — fubon_neo may not be installed.
 try:
@@ -189,19 +192,32 @@ class _ContractsStub:
         return {"refreshed": False, "source": "stub"}
 
 
-class _SubscriptionStub:
-    """Minimal subscription manager stub until a full SubscriptionManager is implemented."""
+class FubonSubscriptionConfigError(RuntimeError):
+    """No usable Fubon subscription list: refuse to subscribe to nothing silently."""
 
-    __slots__ = ("_sdk",)
 
-    def __init__(self, sdk: Any) -> None:
-        self._sdk = sdk
+# Strategy aliases (TMFR1, TXFR2, C0/C1 forms). Fubon cannot subscribe to them
+# until alias resolution exists, so they are rejected rather than dropped quietly.
+_ALIAS_CODE_RE = re.compile(r"^[A-Z]+[RC][0-2]$")
 
-    def subscribe_basket(self, cb: Callable[..., Any]) -> None:
-        pass
 
-    def resubscribe(self) -> bool:
-        return False
+def _configured_subscription_codes() -> list[str]:
+    """Codes from HFT_SYMBOLS (the operator's --symbols list), validated fail-closed."""
+    raw = os.getenv("HFT_SYMBOLS", "")
+    codes = [code.strip() for code in raw.split(",") if code.strip()]
+    if not codes:
+        raise FubonSubscriptionConfigError(
+            "HFT_SYMBOLS is empty: export HFT_SYMBOLS=<codes> (the run --symbols flag does not set it)"
+        )
+    aliases = [code for code in codes if _ALIAS_CODE_RE.match(code)]
+    if aliases:
+        raise FubonSubscriptionConfigError(f"alias codes cannot be subscribed on Fubon yet: {aliases}")
+    return codes
+
+
+def _session_clock() -> dt.datetime:
+    """Clock for the futopt day/night flag. Read at call time so a test can pin it."""
+    return taipei_now()
 
 
 class FubonClientFacade:
@@ -259,7 +275,8 @@ class FubonClientFacade:
         self._order_gateway = _OrderGW(sdk=sdk)
         self._account_gateway = _AccountGW(sdk)
         self._contracts_runtime = _ContractsStub(symbols_path, sdk)
-        self._subscription_manager = _SubscriptionStub(sdk)
+        # Built in subscribe_basket from HFT_SYMBOLS; None until then.
+        self._subscription_manager: FubonSubscriptionManager | None = None
 
         self.log.info(
             "FubonClientFacade initialized",
@@ -304,6 +321,8 @@ class FubonClientFacade:
         return self._session_runtime.reconnect(reason=reason, force=force) and self._bind_session()
 
     def close(self, logout: bool = False) -> None:
+        if self._subscription_manager is not None:
+            self._subscription_manager.close()
         self._quote_runtime.stop()
         if logout:
             self._session_runtime.logout()
@@ -317,7 +336,13 @@ class FubonClientFacade:
     # ------------------------------------------------------------------ #
 
     def subscribe_basket(self, cb: Callable[..., Any]) -> None:
-        self._subscription_manager.subscribe_basket(cb)
+        codes = _configured_subscription_codes()
+        if self._subscription_manager is not None:
+            self._subscription_manager.close()
+        # The lambda reads _session_clock on each call, so a pinned clock takes effect.
+        manager = FubonSubscriptionManager(self._quote_runtime, codes, session_clock=lambda: _session_clock())
+        manager.subscribe_basket(cb)
+        self._subscription_manager = manager
 
     def fetch_snapshots(self) -> list[Any]:
         return []
@@ -326,6 +351,8 @@ class FubonClientFacade:
         self._contracts_runtime.reload_symbols()
 
     def resubscribe(self) -> bool:
+        if self._subscription_manager is None:
+            return False
         return self._subscription_manager.resubscribe()
 
     def get_exchange(self, symbol: str) -> str:

@@ -45,7 +45,7 @@ class TestSubscribeBasket:
         mgr.subscribe_basket(cb)
 
         mock_quote_runtime.register_quote_callbacks.assert_called_once_with(cb, cb)
-        mock_quote_runtime.subscribe.assert_called_once_with(["2330", "2317", "2454"])
+        mock_quote_runtime.subscribe.assert_called_once_with(["2330", "2317", "2454"], after_hours=False)
         assert mgr.subscribed_codes == {"2330", "2317", "2454"}
 
     def test_starts_watchdog(self, mock_quote_runtime: MagicMock) -> None:
@@ -62,7 +62,7 @@ class TestSubscribeBasket:
         mgr = FubonSubscriptionManager(mock_quote_runtime, symbols)
         mgr.subscribe_basket(MagicMock())
 
-        mock_quote_runtime.subscribe.assert_called_once_with(["2330", "2317"])
+        mock_quote_runtime.subscribe.assert_called_once_with(["2330", "2317"], after_hours=False)
 
     def test_max_subscriptions_cap(self, mock_quote_runtime: MagicMock) -> None:
         symbols = [f"SYM{i}" for i in range(250)]
@@ -85,7 +85,7 @@ class TestResubscribe:
 
         assert result is True
         mock_quote_runtime.stop.assert_called_once()
-        mock_quote_runtime.subscribe.assert_called_once_with(["2330", "2317"])
+        mock_quote_runtime.subscribe.assert_called_once_with(["2330", "2317"], after_hours=False)
         mock_quote_runtime.start_quote_watchdog.assert_called_once()
 
     def test_resubscribe_cooldown_rejects(self, mock_quote_runtime: MagicMock) -> None:
