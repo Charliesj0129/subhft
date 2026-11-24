@@ -17,7 +17,6 @@ dependencies = [
     "numba>=0.61,<1",
     "scipy>=1.15.3,<2",
     "exchange-calendars>=4.13.1,<5",
-    "orjson>=3.10,<4",
     "aiohttp>=3.11,<4",
 ]
 
@@ -40,6 +39,7 @@ dev = [
     "pre-commit>=3.7.0",
     "pytest-benchmark>=4.0.0",
     "pyarrow>=23.0.1",
+    "orjson>=3.10,<4",  # test-only: jsonfast byte-compat tests; runtime uses msgspec
 ]
 
 research = [
