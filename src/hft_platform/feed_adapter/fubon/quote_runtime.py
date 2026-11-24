@@ -140,6 +140,38 @@ _ERROR_CODE_REASONS: dict[int, str] = {
 _UNHANDLED_LOG_EVERY: int = 1000
 _MAX_LOGGED_MESSAGE_CHARS: int = 200
 
+# The service caps concurrent futopt WebSocket connections at 7 (see stop()).  A runtime claims a
+# slot before it connects and gives it back when its socket is released, so a relogin or resubscribe
+# cannot open an eighth socket.  The count is process-wide: the cap belongs to the account.
+MAX_LIVE_CONNECTIONS: int = 7
+_connection_slots_lock = threading.Lock()
+_live_connections: int = 0
+
+
+class FubonConnectionLimitError(RuntimeError):
+    """Opening another futopt WebSocket would exceed ``MAX_LIVE_CONNECTIONS``."""
+
+
+def _claim_connection_slot() -> None:
+    global _live_connections
+    with _connection_slots_lock:
+        if _live_connections >= MAX_LIVE_CONNECTIONS:
+            raise FubonConnectionLimitError(f"{MAX_LIVE_CONNECTIONS} futopt connections are open; refusing another")
+        _live_connections += 1
+
+
+def _release_connection_slot() -> None:
+    global _live_connections
+    with _connection_slots_lock:
+        _live_connections = max(0, _live_connections - 1)
+
+
+def _reset_connection_slots() -> None:
+    """Forget every claimed slot.  Tests use it: a runtime that is never stopped keeps its slot."""
+    global _live_connections
+    with _connection_slots_lock:
+        _live_connections = 0
+
 
 class FubonQuoteRuntime:
     """Manages Fubon real-time market data WebSocket subscriptions."""
@@ -311,19 +343,29 @@ class FubonQuoteRuntime:
         connect also bumps the generation: its listeners may stay attached to a reused client.
         """
         generation = self._generation
-        mode = _resolve_realtime_mode(self._realtime_mode)
-        self._sdk.init_realtime(mode, version={"futopt": _FUTOPT_STREAM_VERSION})
-        ws = self._sdk.marketdata.websocket_client.futopt
+        _claim_connection_slot()
         try:
-            # The SDK keeps these listeners after stop(); they drop frames once the generation moves on.
-            ws.on("message", self._message_listener(generation))
-            # An "error" event with no listener is raised inside the SDK's own thread.
-            ws.on("error", self._error_listener(generation))
-            ws.connect()
+            mode = _resolve_realtime_mode(self._realtime_mode)
+            self._sdk.init_realtime(mode, version={"futopt": _FUTOPT_STREAM_VERSION})
+            ws = self._sdk.marketdata.websocket_client.futopt
+            try:
+                # The SDK keeps these listeners after stop(); they drop frames once the generation moves on.
+                ws.on("message", self._message_listener(generation))
+                # An "error" event with no listener is raised inside the SDK's own thread.
+                ws.on("error", self._error_listener(generation))
+                ws.connect()
+            except Exception:
+                # A failed attempt may leave its listeners on a client object the SDK reuses; retire
+                # them so the retry's listeners are the only live ones.
+                self._generation += 1
+                # A connect that raised may still hold a socket: close it before the slot is given back.
+                try:
+                    ws.disconnect()
+                except Exception as exc:
+                    self.log.warning("Fubon websocket disconnect failed", error=str(exc))
+                raise
         except Exception:
-            # A failed attempt may leave its listeners on a client object the SDK reuses; retire
-            # them so the retry's listeners are the only live ones.
-            self._generation += 1
+            _release_connection_slot()
             raise
         self._ws = ws
         self._stopped = False
@@ -657,6 +699,9 @@ class FubonQuoteRuntime:
                 ws.disconnect()
             except Exception as exc:
                 self.log.warning("Fubon websocket disconnect failed", error=str(exc))
+            finally:
+                # Given back even when disconnect raised, so one broken socket cannot wedge the count.
+                _release_connection_slot()
         if self._watchdog_thread is not None and self._watchdog_thread.is_alive():
             self._watchdog_thread.join(timeout=5.0)
             self._watchdog_thread = None
