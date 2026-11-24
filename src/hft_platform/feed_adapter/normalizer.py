@@ -641,8 +641,7 @@ class MarketDataNormalizer:
         "metadata",
         "price_codec",
         "metrics",
-        "_last_symbol",
-        "_last_scale",
+        "_scale_cache",
         "_last_local_ts_tick",
         "_last_local_ts_bidask",
         "_last_local_ts_snapshot",
@@ -669,8 +668,9 @@ class MarketDataNormalizer:
         self._skip_tick_negative_price = _skip.labels(type="tick", reason="negative_price") if _skip else None
         self._skip_bidask_missing_symbol = _skip.labels(type="bidask", reason="missing_symbol") if _skip else None
         self._skip_snapshot_missing_symbol = _skip.labels(type="snapshot", reason="missing_symbol") if _skip else None
-        self._last_symbol: str | None = None
-        self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
+        # (symbol, scale) in ONE reference: two separate fields could be read torn by a concurrent
+        # worker (symbol of one write, scale of another). The tuple is replaced whole, never mutated.
+        self._scale_cache: tuple[str | None, int] = (None, SymbolMetadata.DEFAULT_SCALE)
         self._last_local_ts_tick: int = 0
         self._last_local_ts_bidask: int = 0
         self._last_local_ts_snapshot: int = 0
@@ -780,14 +780,22 @@ class MarketDataNormalizer:
                     self.metrics.feed_interarrival_ns.observe(delta)
             setattr(self, last_ts_attr, local_ts)
 
+    @property
+    def _last_symbol(self) -> str | None:
+        return self._scale_cache[0]
+
+    @property
+    def _last_scale(self) -> int:
+        return self._scale_cache[1]
+
     def _get_scale(self, symbol: str) -> int:
-        if symbol == self._last_symbol:
-            return self._last_scale
+        cached = self._scale_cache
+        if symbol == cached[0]:
+            return cached[1]
         scale = int(self.metadata.price_scale(symbol))
         if scale <= 0:
             scale = 1
-        self._last_symbol = symbol
-        self._last_scale = scale
+        self._scale_cache = (symbol, scale)
         return scale
 
     def _maybe_synthesize_side(
