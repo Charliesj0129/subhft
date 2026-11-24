@@ -20,6 +20,7 @@ from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.wal import WALWriter
+from hft_platform.utils import jsonfast
 
 logger = get_logger("execution.router")
 
@@ -251,8 +252,6 @@ class ExecutionRouter:
         if not os.path.exists(path):
             return
         try:
-            import orjson
-
             loaded = 0
             # Stream, holding one bad line back until the next line shows whether it was
             # the last: keys read before an I/O error stay in the window (those fills are
@@ -268,8 +267,8 @@ class ExecutionRouter:
                             self._fill_dedup_load_mid_skipped += 1
                             pending_bad = False
                         try:
-                            key = orjson.loads(raw)
-                        except orjson.JSONDecodeError:
+                            key = jsonfast.loads(raw)
+                        except jsonfast.DecodeError:
                             key = None
                         if isinstance(key, str) and key:
                             self._seen_fill_ids[key] = None
@@ -313,8 +312,6 @@ class ExecutionRouter:
         # Snapshot under CPython GIL atomicity
         keys_snapshot = list(self._seen_fill_ids.keys())
         try:
-            import orjson
-
             persist_dir = os.path.dirname(path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
@@ -323,7 +320,7 @@ class ExecutionRouter:
             try:
                 with os.fdopen(fd, "wb") as f:
                     for key in keys_snapshot:
-                        f.write(orjson.dumps(key) + b"\n")
+                        f.write(jsonfast.dumps(key) + b"\n")
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)

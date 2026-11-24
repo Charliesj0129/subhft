@@ -185,7 +185,7 @@ class TestPersistDoesNotDropFillsSilently:
     @staticmethod
     def _unserializable(symbol: str, order_id: str) -> FillEvent:
         fill = _make_fill(symbol, order_id)
-        fill.price = 2**70  # orjson rejects integers beyond 64 bits
+        fill.price = object()  # jsonfast (msgspec) refuses non-JSON types with TypeError
         return fill
 
     def test_persist_reports_an_unserializable_fill_instead_of_dropping_it(self, tmp_path):

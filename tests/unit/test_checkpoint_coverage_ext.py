@@ -41,16 +41,13 @@ def _make_store(positions=None, recovery=None):
 
 
 # ---------------------------------------------------------------------------
-# json fallback (lines 37-44) — test without orjson
+# checkpoint codec (msgspec via hft_platform.utils.jsonfast) — no orjson needed
 # ---------------------------------------------------------------------------
 
 
-class TestJsonFallbackPaths:
-    def test_dumps_and_loads_without_orjson(self, tmp_path):
-        """Verify checkpoint write/load works with json fallback (no orjson)."""
-        # We test the actual write/read round-trip; the json fallback is used
-        # if orjson is unavailable. Since we can't easily unimport orjson,
-        # we test that the checkpoint works correctly regardless.
+class TestCheckpointCodec:
+    def test_write_then_load_round_trips_with_the_msgspec_codec(self, tmp_path):
+        """Verify checkpoint write/load round-trips (the SHA-256 verifies on reload)."""
         ckpt_path = str(tmp_path / "ckpt.json")
         store = _make_store(positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 10, "avg_price_scaled": 50000}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)

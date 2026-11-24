@@ -183,7 +183,7 @@ def test_publish_snapshots_payload_at_enqueue_not_dequeue() -> None:
     so the queue entry reflects the tick as observed at ``publish_market_data``
     call time.
     """
-    import orjson
+    from hft_platform.utils import jsonfast
 
     pub = MonitorLivePublisher(host="127.0.0.1", port=6379, queue_size=64)
     pub._running = True
@@ -213,7 +213,7 @@ def test_publish_snapshots_payload_at_enqueue_not_dequeue() -> None:
     # What the consumer finds in the queue should be tick 1, NOT tick 2.
     sym, body_bytes = pub._queue.get_nowait()
     assert sym == "2330"
-    body = orjson.loads(body_bytes)
+    body = jsonfast.loads(body_bytes)
     assert body["ingest_ts"] == 1000, "ingest_ts must reflect enqueue-time tick"
     assert body["bids_price"] == [100, 99, 98, 97, 96], "bids_price torn read regression"
     assert body["asks_price"] == [101, 102, 103, 104, 105], "asks_price torn read regression"
@@ -259,7 +259,7 @@ def test_concurrent_producer_and_consumer_no_torn_read() -> None:
     """
     import threading as _threading
 
-    import orjson
+    from hft_platform.utils import jsonfast
 
     pub = MonitorLivePublisher(host="127.0.0.1", port=6379, queue_size=2048)
     pub._running = True
@@ -299,7 +299,7 @@ def test_concurrent_producer_and_consumer_no_torn_read() -> None:
                 sym, body_bytes = pub._queue.get(timeout=1.0)
             except queue.Empty:
                 return
-            body = orjson.loads(body_bytes)
+            body = jsonfast.loads(body_bytes)
             t = body["ingest_ts"]
             # All five bid levels must belong to the same tick.
             expected_bids = [t * 10 + i for i in range(5)]

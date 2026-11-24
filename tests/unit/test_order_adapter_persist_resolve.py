@@ -89,15 +89,14 @@ def _make_adapter(tmp_config: str):
 def test_load_order_id_map_reads_jsonl_file(tmp_path, tmp_config):
     """_load_order_id_map parses valid JSONL (H3 schema: k, v, t_ns, s)
     and populates order_id_map."""
-    import orjson
-
     from hft_platform.core import timebase
+    from hft_platform.utils import jsonfast
 
     map_path = tmp_path / "oid_map.jsonl"
     now_ns = timebase.now_ns()
     lines = [
-        orjson.dumps({"k": "TOKEN1", "v": "strat1:100", "t_ns": now_ns, "s": "live"}) + b"\n",
-        orjson.dumps({"k": "TOKEN2", "v": "strat2:200", "t_ns": now_ns, "s": "live"}) + b"\n",
+        jsonfast.dumps({"k": "TOKEN1", "v": "strat1:100", "t_ns": now_ns, "s": "live"}) + b"\n",
+        jsonfast.dumps({"k": "TOKEN2", "v": "strat2:200", "t_ns": now_ns, "s": "live"}) + b"\n",
     ]
     map_path.write_bytes(b"".join(lines))
 
@@ -111,13 +110,12 @@ def test_load_order_id_map_reads_jsonl_file(tmp_path, tmp_config):
 def test_load_order_id_map_skips_blank_lines(tmp_path, tmp_config):
     """_load_order_id_map silently skips empty lines in the JSONL file
     (H3 schema)."""
-    import orjson
-
     from hft_platform.core import timebase
+    from hft_platform.utils import jsonfast
 
     map_path = tmp_path / "oid_map.jsonl"
     now_ns = timebase.now_ns()
-    content = b"\n" + orjson.dumps({"k": "K1", "v": "V1", "t_ns": now_ns, "s": "live"}) + b"\n\n"
+    content = b"\n" + jsonfast.dumps({"k": "K1", "v": "V1", "t_ns": now_ns, "s": "live"}) + b"\n\n"
     map_path.write_bytes(content)
 
     with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": str(map_path)}):
@@ -129,15 +127,14 @@ def test_load_order_id_map_skips_blank_lines(tmp_path, tmp_config):
 def test_load_order_id_map_skips_malformed_entries(tmp_path, tmp_config):
     """_load_order_id_map silently skips malformed lines and pre-H3 entries
     that lack t_ns/s metadata (legacy schema dropped to prevent ABA)."""
-    import orjson
-
     from hft_platform.core import timebase
+    from hft_platform.utils import jsonfast
 
     map_path = tmp_path / "oid_map.jsonl"
     now_ns = timebase.now_ns()
     content = (
         b"not-valid-json\n"
-        + orjson.dumps({"k": "GOOD", "v": "strat:1", "t_ns": now_ns, "s": "live"})
+        + jsonfast.dumps({"k": "GOOD", "v": "strat:1", "t_ns": now_ns, "s": "live"})
         + b"\n"
         + b'{"missing_v": true}\n'
     )
@@ -154,14 +151,13 @@ def test_load_order_id_map_skips_malformed_entries(tmp_path, tmp_config):
 def test_load_order_id_map_enforces_max_size(tmp_path, tmp_config):
     """_load_order_id_map evicts oldest entries when max size is exceeded
     (H3 schema)."""
-    import orjson
-
     from hft_platform.core import timebase
+    from hft_platform.utils import jsonfast
 
     map_path = tmp_path / "oid_map.jsonl"
     now_ns = timebase.now_ns()
     # Write 5 entries but cap max size at 3
-    lines = [orjson.dumps({"k": f"K{i}", "v": f"V{i}", "t_ns": now_ns, "s": "live"}) + b"\n" for i in range(5)]
+    lines = [jsonfast.dumps({"k": f"K{i}", "v": f"V{i}", "t_ns": now_ns, "s": "live"}) + b"\n" for i in range(5)]
     map_path.write_bytes(b"".join(lines))
 
     with patch.dict(
@@ -190,7 +186,7 @@ def test_load_order_id_map_nonexistent_file_is_noop(tmp_config):
 
 def test_persist_order_id_map_writes_jsonl(tmp_path, tmp_config):
     """persist_order_id_map atomically writes order_id_map as JSONL."""
-    import orjson
+    from hft_platform.utils import jsonfast
 
     persist_path = tmp_path / "out" / "oid_map.jsonl"
 
@@ -204,7 +200,7 @@ def test_persist_order_id_map_writes_jsonl(tmp_path, tmp_config):
     assert persist_path.exists()
     content = persist_path.read_bytes()
     lines = [ln for ln in content.split(b"\n") if ln.strip()]
-    parsed = {orjson.loads(ln)["k"]: orjson.loads(ln)["v"] for ln in lines}
+    parsed = {jsonfast.loads(ln)["k"]: jsonfast.loads(ln)["v"] for ln in lines}
     assert parsed["TOK_A"] == "stratA:1"
     assert parsed["TOK_B"] == "stratB:2"
 
@@ -224,7 +220,7 @@ def test_persist_order_id_map_creates_parent_dir(tmp_path, tmp_config):
 
 def test_persist_order_id_map_is_idempotent(tmp_path, tmp_config):
     """Calling persist_order_id_map twice overwrites — file has exactly the current map."""
-    import orjson
+    from hft_platform.utils import jsonfast
 
     persist_path = tmp_path / "oid_map.jsonl"
 
@@ -241,7 +237,7 @@ def test_persist_order_id_map_is_idempotent(tmp_path, tmp_config):
 
     content = persist_path.read_bytes()
     lines = [ln for ln in content.split(b"\n") if ln.strip()]
-    keys = [orjson.loads(ln)["k"] for ln in lines]
+    keys = [jsonfast.loads(ln)["k"] for ln in lines]
     assert "K2" in keys
     assert "K1" not in keys
 
@@ -633,11 +629,11 @@ def test_persist_order_id_map_cleans_up_tmp_file_on_inner_failure(tmp_path, tmp_
             pass
         return fd2, tmp_p
 
-    # Simpler approach: make orjson.dumps raise after the file is created
-    import orjson
+    # Simpler approach: make the JSON encoder raise after the file is created
+    from hft_platform.utils import jsonfast
 
     call_count = [0]
-    original_dumps = orjson.dumps
+    original_dumps = jsonfast.dumps
 
     def _fail_on_second_dumps(obj):
         call_count[0] += 1
@@ -645,7 +641,7 @@ def test_persist_order_id_map_cleans_up_tmp_file_on_inner_failure(tmp_path, tmp_
             raise RuntimeError("simulated dumps failure")
         return original_dumps(obj)
 
-    with patch("orjson.dumps", side_effect=_fail_on_second_dumps):
+    with patch.object(jsonfast, "dumps", side_effect=_fail_on_second_dumps):
         # Should not raise — exception caught and logged, temp file cleaned up
         adapter.persist_order_id_map()
 

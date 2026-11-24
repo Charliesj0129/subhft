@@ -36,6 +36,7 @@ from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContra
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
 from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, heartbeat_writable, write_heartbeat
 from hft_platform.services.loop_watchdog import LoopStallWatchdog
+from hft_platform.utils import jsonfast
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
@@ -3222,17 +3223,6 @@ class HFTSystem:
         is the last-resort path after all queues/buffers are exhausted.
         """
         try:
-            import orjson as _json_mod
-
-            def _ser(obj):
-                return _json_mod.dumps(obj)
-        except ImportError:
-            import json as _json_mod  # type: ignore[no-redef]
-
-            def _ser(obj):
-                return _json_mod.dumps(obj, separators=(",", ":")).encode("utf-8")
-
-        try:
             payload = {
                 "topic": getattr(event, "topic", "unknown"),
                 "data": getattr(event, "data", {}),
@@ -3242,7 +3232,7 @@ class HFTSystem:
             dlq_path = os.path.join(os.getenv("HFT_STATE_DIR", ".state"), "exec_overflow_dlq.jsonl")
             os.makedirs(os.path.dirname(dlq_path), exist_ok=True)
             with open(dlq_path, "ab") as f:
-                f.write(_ser(payload) + b"\n")
+                f.write(jsonfast.dumps(payload) + b"\n")
         except Exception as exc:
             logger.error("exec_overflow_dlq_write_failed", error=str(exc))
 

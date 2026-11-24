@@ -84,7 +84,7 @@ class TestRecoverFillGaps:
         """When order_id_map is empty (post-crash), checkpoint provides
         symbol→strategy mapping to resolve orphaned fills."""
         # Prepare checkpoint with TXFD6 → strat_maker mapping
-        import orjson
+        from hft_platform.utils import jsonfast
 
         ckpt_data = {
             "trading_date": "20260414",
@@ -101,14 +101,14 @@ class TestRecoverFillGaps:
                 },
             },
         }
-        body = orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS)
+        body = jsonfast.dumps_sorted(ckpt_data)
         import hashlib
 
         sha = hashlib.sha256(body).hexdigest()
         ckpt_data["sha256"] = sha
         ckpt_path = str(tmp_path / "checkpoint.json")
         with open(ckpt_path, "wb") as f:
-            f.write(orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS))
+            f.write(jsonfast.dumps_sorted(ckpt_data))
 
         # Seed DLQ with orphaned fill (unique fill_id to avoid dedup)
         dlq = get_orphaned_fill_dlq()
@@ -143,7 +143,7 @@ class TestRecoverFillGaps:
         """Fills whose fill_id is already in dedup window are skipped."""
         import hashlib
 
-        import orjson
+        from hft_platform.utils import jsonfast
 
         ckpt_data = {
             "trading_date": "20260414",
@@ -160,12 +160,12 @@ class TestRecoverFillGaps:
                 },
             },
         }
-        body = orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS)
+        body = jsonfast.dumps_sorted(ckpt_data)
         sha = hashlib.sha256(body).hexdigest()
         ckpt_data["sha256"] = sha
         ckpt_path = str(tmp_path / "checkpoint.json")
         with open(ckpt_path, "wb") as f:
-            f.write(orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS))
+            f.write(jsonfast.dumps_sorted(ckpt_data))
 
         dlq = get_orphaned_fill_dlq()
         fill = _make_orphaned_fill(symbol="TXFD6", fill_id="ALREADY_SEEN")

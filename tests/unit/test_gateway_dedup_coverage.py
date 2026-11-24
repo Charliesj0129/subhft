@@ -46,13 +46,13 @@ class TestLoadException:
 
 
 # ---------------------------------------------------------------------------
-# json fallback _dumps/_loads (lines 55-62)
+# _dumps/_loads codec (msgspec via hft_platform.utils.jsonfast)
 # ---------------------------------------------------------------------------
 
 
-class TestJsonFallbackDumpsLoads:
+class TestDedupCodecRoundtrip:
     def test_roundtrip_serialization(self):
-        """The _dumps/_loads functions produce valid JSON regardless of backend."""
+        """The _dumps/_loads functions produce compact JSON bytes and read it back."""
         from hft_platform.gateway.dedup import _dumps, _loads
 
         obj = {"key": "test", "approved": True, "reason_code": "OK", "cmd_id": 42}
@@ -86,15 +86,15 @@ class TestIdempotencyRecordDefaults:
 
 
 # ---------------------------------------------------------------------------
-# json fallback _dumps/_loads (lines 55-62)
+# _dumps/_loads codec without orjson
 # ---------------------------------------------------------------------------
 
 
-class TestJsonFallbackDirect:
-    """Directly exercise the json-based _dumps/_loads fallback functions (lines 55-62)."""
+class TestDedupCodecWithoutOrjson:
+    """The free-threaded build has no orjson wheel: the codec must not need it."""
 
-    def test_json_fallback_via_module_reload(self):
-        """Reload dedup module with orjson blocked to exercise json fallback path."""
+    def test_module_reload_without_orjson_keeps_the_msgspec_codec(self):
+        """Reload dedup module with orjson blocked: _dumps/_loads still work, byte for byte."""
         import builtins
         import importlib
 
@@ -109,18 +109,17 @@ class TestJsonFallbackDirect:
             return real_import(name, *args, **kwargs)
 
         try:
-            # Block orjson and reload the module to trigger except ImportError path
+            # Block orjson and reload the module: it must not try to import it
             with patch.object(builtins, "__import__", side_effect=block_orjson):
                 importlib.reload(dedup_mod)
 
-            # The reloaded module should have json-based _dumps/_loads
             json_dumps = dedup_mod._dumps
             json_loads = dedup_mod._loads
 
-            # Verify _dumps returns bytes
+            # Verify _dumps returns compact bytes
             data = {"key": "fb", "approved": True, "reason_code": "OK", "cmd_id": 5}
             result = json_dumps(data)
-            assert isinstance(result, bytes)
+            assert result == b'{"key":"fb","approved":true,"reason_code":"OK","cmd_id":5}'
 
             # Verify _loads roundtrips correctly from bytes
             parsed = json_loads(result)
@@ -133,10 +132,10 @@ class TestJsonFallbackDirect:
             assert str_result["key"] == "s"
             assert str_result["cmd_id"] == 3
         finally:
-            # Reload again to restore original orjson-backed functions
+            # Reload again to restore the module state
             importlib.reload(dedup_mod)
 
-    def test_json_fallback_roundtrip_through_persist_load(self):
+    def test_persist_load_roundtrip_through_the_codec(self):
         """Exercise _dumps/_loads via persist/load to ensure they work end-to-end."""
         import os
         import tempfile

@@ -101,7 +101,7 @@ jobs:
       - name: Native extensions import
         run: |
           docker run --rm --entrypoint python hft-platform:ci \
-            -c "import numpy, pandas, scipy, numba, msgspec, orjson, clickhouse_connect, structlog, telegram"
+            -c "import numpy, pandas, scipy, numba, msgspec, clickhouse_connect, structlog, telegram"
 
       - name: Smoke-test the installed application wheel
         run: bash scripts/test_deployment_image.sh hft-platform:ci

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import threading
 from typing import Any, Callable, Dict
@@ -7,12 +6,8 @@ from typing import Any, Callable, Dict
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.utils import jsonfast
 from hft_platform.utils.serialization import serialize
-
-try:
-    import orjson as _orjson
-except ImportError:
-    _orjson = None  # type: ignore[assignment]
 
 logger = get_logger("recorder.batcher")
 
@@ -590,14 +585,9 @@ class Batcher:
 
             header = {"__wal_table__": self.table_name, "__row_count__": len(rows)}
             with open(filepath, "wb") as f:
-                if _orjson is not None:
-                    f.write(_orjson.dumps(header) + b"\n")
-                    for row in rows:
-                        f.write(_orjson.dumps(row) + b"\n")
-                else:
-                    f.write(json.dumps(header, default=str).encode() + b"\n")
-                    for row in rows:
-                        f.write(json.dumps(row, default=str).encode() + b"\n")
+                f.write(jsonfast.dumps(header) + b"\n")
+                for row in rows:
+                    f.write(jsonfast.dumps(row) + b"\n")
                 f.flush()
                 os.fsync(f.fileno())
 

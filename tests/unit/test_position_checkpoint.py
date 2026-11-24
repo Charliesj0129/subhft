@@ -89,13 +89,9 @@ class TestWriteCheckpoint:
             data = json.loads(f.read())
 
         stored_sha = data.pop("sha256")
-        # Re-serialize without sha256 and verify
-        try:
-            import orjson
-
-            body = orjson.dumps(data)
-        except ImportError:
-            body = json.dumps(data, separators=(",", ":")).encode("utf-8")
+        # Re-serialize without sha256 and verify, with the stdlib as an
+        # independent reference for "compact, key-sorted, UTF-8 JSON".
+        body = json.dumps(data, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")
 
         assert hashlib.sha256(body).hexdigest() == stored_sha
 

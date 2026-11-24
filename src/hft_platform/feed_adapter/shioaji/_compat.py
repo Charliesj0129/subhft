@@ -65,8 +65,8 @@ def to_plain_payload(obj: Any, _depth: int = 0) -> Any:
     ``items`` ``get`` ``__getitem__`` ``__iter__`` ``__len__`` ``__contains__``
     — everything except being a ``dict``. They are structurally mappings and
     nominally nothing, so they fail every ``isinstance(x, dict)`` gate
-    downstream *and* ``orjson``, which serializes ``dict`` rather than
-    dict-shaped things.
+    downstream *and* the JSON encoder (``msgspec``), which serializes ``dict``
+    rather than dict-shaped things.
 
     Measured consequence on THESHOW 2026-08-10, on the first two orders in two
     months: ``normalize_order`` returned ``None`` at its ``isinstance`` guard

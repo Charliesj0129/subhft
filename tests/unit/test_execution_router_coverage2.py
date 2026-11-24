@@ -2,7 +2,7 @@
 
 Covers:
 - _create_task_with_error_handling: InvalidStateError (lines 57-58)
-- _load_fill_dedup: empty line skip (line 149), orjson import failure (lines 161-162)
+- _load_fill_dedup: empty line skip (line 149), non-string entries skipped
 - persist_fill_dedup: inner exception with tmp file cleanup (lines 186-188)
 - _backfill_order_id_map: nested order/status dict extraction (line 219)
 - run() fill path: on_fill_async path (line 408)
@@ -180,14 +180,14 @@ async def test_create_task_error_handling_invalid_state():
 
 def test_load_fill_dedup_skips_empty_lines(tmp_path, monkeypatch):
     """_load_fill_dedup skips empty lines in dedup file."""
-    import orjson
+    from hft_platform.utils import jsonfast
 
     dedup_path = tmp_path / "fill_dedup.jsonl"
     lines = [
-        orjson.dumps("key1") + b"\n",
+        jsonfast.dumps("key1") + b"\n",
         b"\n",
         b"  \n",
-        orjson.dumps("key2") + b"\n",
+        jsonfast.dumps("key2") + b"\n",
     ]
     dedup_path.write_bytes(b"".join(lines))
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(dedup_path))
@@ -199,14 +199,14 @@ def test_load_fill_dedup_skips_empty_lines(tmp_path, monkeypatch):
 
 def test_load_fill_dedup_skips_non_string_entries(tmp_path, monkeypatch):
     """_load_fill_dedup skips non-string JSON entries."""
-    import orjson
+    from hft_platform.utils import jsonfast
 
     dedup_path = tmp_path / "fill_dedup.jsonl"
     lines = [
-        orjson.dumps("valid_key") + b"\n",
-        orjson.dumps(12345) + b"\n",  # int, not string
-        orjson.dumps("") + b"\n",  # empty string
-        orjson.dumps("another_key") + b"\n",
+        jsonfast.dumps("valid_key") + b"\n",
+        jsonfast.dumps(12345) + b"\n",  # int, not string
+        jsonfast.dumps("") + b"\n",  # empty string
+        jsonfast.dumps("another_key") + b"\n",
     ]
     dedup_path.write_bytes(b"".join(lines))
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(dedup_path))

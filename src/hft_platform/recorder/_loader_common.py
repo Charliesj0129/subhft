@@ -12,24 +12,15 @@ import os
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.utils import jsonfast
 
 logger = get_logger("wal_loader")
 
 # ---------------------------------------------------------------------------
-# JSON codec: prefer orjson, fallback to stdlib json
+# JSON codec: msgspec.json via hft_platform.utils.jsonfast (no stdlib fallback)
 # ---------------------------------------------------------------------------
-try:
-    import orjson
-
-    def _dumps(obj: object) -> str:
-        return orjson.dumps(obj).decode()
-
-    _loads = orjson.loads
-except ImportError:
-    import json
-
-    _dumps = json.dumps
-    _loads = json.loads
+_dumps = jsonfast.dumps_str
+_loads = jsonfast.loads
 
 # ---------------------------------------------------------------------------
 # ClickHouse price scale constant
