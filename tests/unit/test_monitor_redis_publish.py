@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import io
+import os
 import queue
+import subprocess
+import sys
 import time
 from typing import Any
 
@@ -318,3 +321,18 @@ def test_concurrent_producer_and_consumer_no_torn_read() -> None:
     t_prod.join(timeout=5.0)
 
     assert not errors, f"found {len(errors)} torn reads; first: {errors[0]}"
+
+
+def test_monitor_leaf_import_succeeds_without_rich():
+    """`rich` is an optional extra: importing a leaf module must not pull it in via the package.
+
+    The free-threaded runtime image has no `rich`; blocking the name in `sys.modules` reproduces that.
+    """
+    code = "import sys\nsys.modules['rich'] = None\nimport hft_platform.monitor._redis_publish\nprint('imported')\n"
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("HFT_", "SHIOAJI_"))}
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=25)
+
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "imported" in result.stdout, result.stderr[-2000:]
