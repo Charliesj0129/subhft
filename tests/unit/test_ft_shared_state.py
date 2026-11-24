@@ -81,7 +81,6 @@ class _ScaleMetadata:
 def _make_normalizer(metadata: Any) -> Any:
     with (
         patch("hft_platform.feed_adapter.normalizer.MetricsRegistry") as registry,
-        patch("hft_platform.feed_adapter.normalizer._HAS_FUSED", False),
     ):
         registry.get.return_value = None
         from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
@@ -133,7 +132,6 @@ def test_get_scale_clamps_non_positive_scale_to_one_single_thread():
 def _make_bus(*, single_writer: bool, size: int = 1 << 14) -> Any:
     with (
         patch("hft_platform.engine.event_bus._WAIT_MODE", "event"),
-        patch("hft_platform.engine.event_bus._RUST_ENABLED", False),
     ):
         from hft_platform.engine.event_bus import RingBufferBus
 
