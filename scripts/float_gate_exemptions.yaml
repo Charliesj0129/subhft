@@ -551,7 +551,7 @@ exemptions:
     kind: not-money
     reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/order/adapter.py
-    code: "async def _settle_expired_phantoms_once(self, ttl_s: float) -> None:"
+    code: "async def _settle_expired_phantoms_once(self, ttl_s: float, trades: list[Any] | None) -> None:"
     kind: not-money
     reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/order/adapter.py

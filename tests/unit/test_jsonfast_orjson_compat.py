@@ -356,7 +356,7 @@ def test_fill_dedup_file_crosses_codecs(tmp_path):
     keys = ["F-1:O-1:台", "F-2", "x" * 300, 'q"uote']
     legacy = tmp_path / "legacy.jsonl"
     legacy.write_bytes(b"".join(orjson.dumps(k) + b"\n" for k in keys))
-    assert list(_router(str(legacy))._seen_fill_ids) == keys
+    assert _router(str(legacy))._legacy_fill_ids == set(keys)
 
     written = tmp_path / "written.jsonl"
     router = _router(str(written))

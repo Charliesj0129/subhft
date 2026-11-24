@@ -65,7 +65,9 @@ class _StubFillEvent:
     arrival_price: int = 0
     side: str = "BUY"
     qty: int = 1
+    price: int = 37500_0000
     price_scaled: int = 37500_0000
+    match_ts_ns: int = 1_000_000_000
 
 
 def _make_router_with_recorder(metrics: MagicMock) -> tuple[ExecutionRouter, asyncio.Queue]:

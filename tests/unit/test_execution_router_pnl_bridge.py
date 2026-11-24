@@ -52,7 +52,17 @@ async def test_router_calls_notify_fill_pnl_on_fill():
     risk_engine = MagicMock()
     router = _make_router(risk_engine=risk_engine)
     fill_norm = SimpleNamespace(
-        account_id="a", strategy_id="s", symbol="X", order_id="o", fill_id="f", price=100, qty=1, side=1, fee=0, tax=0
+        account_id="a",
+        strategy_id="s",
+        symbol="X",
+        order_id="o",
+        fill_id="f",
+        price=100,
+        qty=1,
+        side=1,
+        fee=0,
+        tax=0,
+        match_ts_ns=1_000_000_000,
     )
     router.normalizer.normalize_fill = MagicMock(return_value=fill_norm)
     delta = SimpleNamespace(realized_pnl=5000)

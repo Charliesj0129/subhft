@@ -128,6 +128,16 @@ def _fill(side: Side, symbol: str = _SYMBOL, qty: int = 1) -> FillEvent:
     )
 
 
+def _claimed(adapter: OrderAdapter, key: str) -> list[int]:
+    """Sides of ``key``'s occurrences that hold a fill claim (2026-11-13: a claim keeps
+    the record until the phantom's Trade confirms it, and notes no ledger before that)."""
+    return [r.side for r in adapter._get_phantom_records().get(key, []) if r.claim is not None]
+
+
+def _unclaimed_keys(adapter: OrderAdapter) -> frozenset[str]:
+    return frozenset(k for k, recs in adapter._get_phantom_records().items() if any(r.claim is None for r in recs))
+
+
 def _feedback(adapter: OrderAdapter) -> list[Any]:
     sink = adapter._rejection_sink
     return [sink.get_nowait() for _ in range(sink.qsize())]
@@ -152,10 +162,11 @@ def test_resolve_phantom_fill_skips_opposite_side_phantom_when_index_empty(tmp_c
     assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _STRATEGY
 
     records = adapter._get_phantom_records()
-    assert _SELL_KEY not in records, "the SELL fill consumes the SELL phantom"
+    assert _claimed(adapter, _SELL_KEY) == [int(Side.SELL)], "the SELL fill claims the SELL phantom"
     assert [r.intent.intent_id for r in records[_BUY_KEY]] == [_BUY_ID], "the BUY phantom is left alone"
-    assert adapter.get_phantom_candidates() == frozenset({_BUY_KEY})
-    assert adapter.filled_qty_for(_SELL_KEY) == 1, "the fill is credited to the SELL order"
+    assert _claimed(adapter, _BUY_KEY) == []
+    assert _unclaimed_keys(adapter) == frozenset({_BUY_KEY})
+    assert adapter.filled_qty_for(_SELL_KEY) == 0, "the ledger is noted only when the Trade confirms the claim"
     assert adapter.filled_qty_for(_BUY_KEY) == 0, "the BUY order has not traded"
 
 
@@ -180,9 +191,9 @@ def test_resolve_phantom_fill_same_side_phantom_still_matches_oldest_first(tmp_c
 
     assert adapter.resolve_phantom_fill(_fill(Side.BUY)) == _STRATEGY
 
-    assert adapter.get_phantom_candidates() == frozenset({f"{_STRATEGY}:{_BUY_ID + 1}", _SELL_KEY})
-    assert adapter.filled_qty_for(_BUY_KEY) == 1, "FIFO: the oldest BUY phantom is credited"
-    assert adapter.filled_qty_for(_SELL_KEY) == 0
+    assert _unclaimed_keys(adapter) == frozenset({f"{_STRATEGY}:{_BUY_ID + 1}", _SELL_KEY})
+    assert _claimed(adapter, _BUY_KEY) == [int(Side.BUY)], "FIFO: the oldest BUY phantom holds the claim"
+    assert _claimed(adapter, _SELL_KEY) == []
 
 
 def test_resolve_phantom_fill_still_requires_matching_symbol(tmp_config):
@@ -238,9 +249,8 @@ def test_resolve_phantom_fill_legacy_zero_qty_record_still_matches_any_side(tmp_
 
     assert adapter.resolve_phantom_fill(_fill(fill_side)) == _STRATEGY
 
-    assert adapter.get_phantom_candidates() == frozenset(), "the legacy record is consumed"
-    assert legacy_key not in adapter._phantom_order_keys
-    assert adapter.filled_qty_for(legacy_key) == 1
+    assert _claimed(adapter, legacy_key) == [-1], "the legacy record holds the claim"
+    assert _unclaimed_keys(adapter) == frozenset()
 
 
 # --------------------------------------------------------------------------- #
@@ -289,8 +299,8 @@ async def test_failed_force_flat_phantom_matches_the_tracked_close_side_not_inte
         assert adapter.get_phantom_candidates() == frozenset({_FF_KEY}), "the phantom is left for its own fill"
         assert adapter.filled_qty_for(_FF_KEY) == 0
     else:
-        assert adapter.get_phantom_candidates() == frozenset(), "the SELL fill consumes the phantom"
-        assert adapter.filled_qty_for(_FF_KEY) == 1
+        assert _claimed(adapter, _FF_KEY) == [int(Side.SELL)], "the SELL fill claims the phantom"
+        assert _unclaimed_keys(adapter) == frozenset()
 
 
 @pytest.mark.asyncio
@@ -305,8 +315,8 @@ async def test_failed_force_flat_phantom_without_tracked_order_matches_either_si
 
     assert adapter.resolve_phantom_fill(_fill(fill_side)) == _STRATEGY
 
-    assert adapter.get_phantom_candidates() == frozenset(), "the unknown-side phantom is consumed"
-    assert adapter.filled_qty_for(_FF_KEY) == 1
+    assert _claimed(adapter, _FF_KEY) == [-1], "the unknown-side phantom holds the claim"
+    assert _unclaimed_keys(adapter) == frozenset()
 
 
 @pytest.mark.asyncio
@@ -355,10 +365,10 @@ def test_resolve_phantom_fill_scans_past_opposite_side_head_of_a_reused_intent_i
 
     assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _A_STRATEGY, "the older SELL under A wins over B's"
 
-    assert _sides(adapter, _A_KEY) == [int(Side.BUY)], "A's remaining occurrence is the BUY one"
+    assert _sides(adapter, _A_KEY) == [int(Side.BUY), int(Side.SELL)], "the record is kept with the claim"
+    assert _claimed(adapter, _A_KEY) == [int(Side.SELL)], "A's SELL occurrence holds the claim, not its BUY"
     assert _sides(adapter, _B_KEY) == [int(Side.SELL)], "B is untouched"
-    assert adapter.filled_qty_for(_A_KEY) == 1
-    assert adapter.filled_qty_for(_B_KEY) == 0
+    assert _claimed(adapter, _B_KEY) == []
 
 
 def test_resolve_phantom_fill_pending_index_pops_the_same_side_occurrence_of_a_reused_intent_id(tmp_config):
@@ -371,9 +381,10 @@ def test_resolve_phantom_fill_pending_index_pops_the_same_side_occurrence_of_a_r
     assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _A_STRATEGY
 
     assert not adapter._pending_fill_index, "the SELL pending-fill entry is consumed"
-    assert _sides(adapter, _A_KEY) == [int(Side.BUY)], "the BUY occurrence is not the one popped"
+    assert _claimed(adapter, _A_KEY) == [int(Side.SELL)], "the BUY occurrence is not the one claimed"
+    assert _sides(adapter, _A_KEY) == [int(Side.BUY), int(Side.SELL)]
     assert adapter.get_phantom_candidates() == frozenset({_A_KEY})
-    assert adapter.filled_qty_for(_A_KEY) == 1
+    assert adapter.filled_qty_for(_A_KEY) == 0, "the ledger waits for the Trade's confirmation"
 
 
 def test_resolve_phantom_fill_pending_index_keeps_all_phantoms_when_none_match_the_side(tmp_config):
@@ -428,17 +439,19 @@ def test_resolve_phantom_fill_claims_oldest_occurrence_across_keys_not_first_key
 
     assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _B_STRATEGY, "B's SELL is older than A's reused one"
 
-    assert _B_KEY not in adapter._get_phantom_records(), "B's only occurrence is consumed"
-    assert adapter.filled_qty_for(_B_KEY) == 1
+    assert _claimed(adapter, _B_KEY) == [int(Side.SELL)], "B's only occurrence holds the claim"
     assert [(r.symbol, r.side) for r in adapter._get_phantom_records()[_A_KEY]] == [
         (_OLD_SYMBOL, int(Side.BUY)),
         (_SYMBOL, int(Side.SELL)),
     ], "A keeps both occurrences, including its newer SELL on NEW"
-    assert adapter.filled_qty_for(_A_KEY) == 0
-    assert adapter.get_phantom_candidates() == frozenset({_A_KEY})
+    assert _claimed(adapter, _A_KEY) == []
+    assert _unclaimed_keys(adapter) == frozenset({_A_KEY})
     # The next SELL fill on NEW then finds A's occurrence: nothing was lost, only ordered.
     assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _A_STRATEGY
-    assert [(r.symbol, r.side) for r in adapter._get_phantom_records()[_A_KEY]] == [(_OLD_SYMBOL, int(Side.BUY))]
+    assert [(r.symbol, r.side, r.claim is not None) for r in adapter._get_phantom_records()[_A_KEY]] == [
+        (_OLD_SYMBOL, int(Side.BUY), False),
+        (_SYMBOL, int(Side.SELL), True),
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -467,5 +480,5 @@ async def test_failed_new_intent_with_missing_side_registers_unknown_side_phanto
     assert adapter.get_phantom_candidates() == frozenset({_BAD_KEY})
     # Unknown side matches either side: the order may have gone out as either.
     assert adapter.resolve_phantom_fill(_fill(Side.BUY)) == _STRATEGY
-    assert adapter.get_phantom_candidates() == frozenset()
-    assert adapter.filled_qty_for(_BAD_KEY) == 1
+    assert _claimed(adapter, _BAD_KEY) == [-1]
+    assert _unclaimed_keys(adapter) == frozenset()
