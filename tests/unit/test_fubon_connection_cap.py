@@ -75,6 +75,23 @@ def test_failed_connect_gives_its_slot_back_and_closes_the_socket() -> None:
     with pytest.raises(RuntimeError, match="connect refused"):
         qr.FubonQuoteRuntime(sdk).subscribe(["TXFA4"])
     ws.disconnect.assert_called_once()
+    assert qr._live_connections == 0
     others = [_runtime() for _ in range(qr.MAX_LIVE_CONNECTIONS)]
     for rt in others:
         rt.subscribe(["TXFA4"])
+
+
+def test_relogin_stops_the_previous_quote_runtime_and_gives_its_slot_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    from hft_platform.feed_adapter.fubon import client as client_module
+
+    monkeypatch.setattr(client_module, "FubonSDK", MagicMock(name="FubonSDK"))
+    monkeypatch.setattr(client_module, "build_fubon_sdk", lambda _sdk_cls: (MagicMock(name="sdk"), ""))
+    session = MagicMock(name="session")
+    session.login.return_value = True
+    monkeypatch.setattr(client_module, "FubonSessionRuntime", MagicMock(return_value=session))
+    fub = client_module.FubonClient()
+    assert fub.login()
+    fub._quote_runtime.subscribe(["TXFA4"])
+    assert qr._live_connections == 1
+    assert fub.login()
+    assert qr._live_connections == 0

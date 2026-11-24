@@ -140,6 +140,8 @@ class FubonClient:
         self._session = session
         self._order_gateway = FubonOrderGateway(sdk=sdk, account=account)
         self._account_gateway = FubonAccountGateway(sdk=sdk, account=account)
+        # A second login replaces the runtime: stop the old one first, or its socket and its slot stay held.
+        self._quote_runtime.stop()
         self._quote_runtime = FubonQuoteRuntime(sdk=sdk)
         if self._on_order_cb is not None and self._on_deal_cb is not None:
             try:
