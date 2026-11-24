@@ -54,6 +54,8 @@ def _mock_services():
         # Extract short name from target, e.g. "hft_platform.services.bootstrap.RingBufferBus" -> "RingBufferBus"
         name = p.attribute
         mocks[name] = m
+    # HFT_MD_WORKERS=0 (the default) leaves committed_view None; a bare MagicMock would invent one.
+    mocks["MarketDataService"].return_value.committed_view = None
     yield mocks
     for p in started:
         p.stop()
