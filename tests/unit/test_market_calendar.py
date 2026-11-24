@@ -7,6 +7,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _restore_calendar_module_state(monkeypatch: pytest.MonkeyPatch):
+    """Tests below set market_calendar._xcals to None/False; leaking that makes
+    every later get_calendar() in the same worker unavailable (fails open)."""
+    from hft_platform.core import market_calendar as mc
+
+    monkeypatch.setattr(mc, "_xcals", mc._xcals)
+    yield
+    mc.reset_calendar()
+
+
 def test_market_calendar_initialization():
     """Test MarketCalendar initializes correctly."""
     from hft_platform.core.market_calendar import MarketCalendar, reset_calendar
