@@ -50,6 +50,7 @@ from ._md_ingestion import (
 )
 from ._md_observability import MarketDataObservabilityMixin
 from ._md_reconnect import MarketDataReconnectMixin
+from ._md_sharded import MarketDataShardingMixin, ShardedMDPipeline, md_workers_from_env
 
 logger = get_logger("service.market_data")
 
@@ -267,7 +268,7 @@ def _obs_policy() -> str:
 _CALLBACK_LOG_INTERVAL_S = 10.0
 
 
-class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
+class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, MarketDataShardingMixin):
     def __init__(
         self,
         bus: RingBufferBus,
@@ -661,6 +662,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # Prevent GC of fire-and-forget asyncio tasks
         self._background_tasks: set[asyncio.Task] = set()
 
+        # P3: symbol-sharded MD worker threads. 0 (default) keeps the single-loop path unchanged.
+        self._init_md_shards(md_workers_from_env())
+
     def _anchor_task(self, coro: Any) -> asyncio.Task:
         """Create an asyncio task and anchor it to prevent GC before completion."""
         task = asyncio.create_task(coro)
@@ -865,6 +869,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
+        if isinstance(getattr(self, "_md_shards", None), ShardedMDPipeline):
+            await self._run_sharded()
+            return
         logger.info("MarketDataService started")
         self.lob.start_metrics_worker(self.loop)
 
@@ -1440,7 +1447,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
             if hasattr(self, "loop"):
                 if msg is not None:
-                    self.loop.call_soon_threadsafe(self._enqueue_raw, exchange, msg)
+                    shards = getattr(self, "_md_shards", None)
+                    if isinstance(shards, ShardedMDPipeline):
+                        shards.offer(msg)
+                    else:
+                        self.loop.call_soon_threadsafe(self._enqueue_raw, exchange, msg)
                 else:
                     if self._cb_drop_parse_miss:
                         self._cb_drop_parse_miss.inc()
@@ -1976,56 +1987,64 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         except asyncio.QueueFull:
             self._raw_dropped_count += 1
             self._raw_consecutive_drops += 1
-            if self.metrics_registry:
-                self.metrics_registry.raw_queue_dropped_total.inc()
-            if self._raw_dropped_count % 100 == 1:
-                logger.warning(
-                    "raw_queue full, dropping tick",
-                    dropped=self._raw_dropped_count,
-                    consecutive_drops=self._raw_consecutive_drops,
-                    queue_size=self._raw_queue_size,
-                )
-            # Sliding window drop rate (leaky bucket): catches intermittent bursts
-            # that reset _raw_consecutive_drops.  O(1) time/memory, no allocations.
-            now_ns = timebase.now_ns()
-            if self._raw_drop_window_last_ns > 0:
-                dt_s = (now_ns - self._raw_drop_window_last_ns) / 1_000_000_000.0
-                decay = math.exp(-dt_s / self._raw_drop_window_s) if dt_s < self._raw_drop_window_s * 5 else 0.0
-                self._raw_drop_window_count = self._raw_drop_window_count * decay + 1.0
-            else:
-                self._raw_drop_window_count = 1.0
-            self._raw_drop_window_last_ns = now_ns
+            self._escalate_raw_drop()
 
-            # Escalate to StormGuard on sustained drops
-            sg = self._storm_guard
-            if sg is not None:
-                if self._raw_consecutive_drops >= self._raw_drop_halt_threshold:
-                    try:
-                        sg.trigger_halt(f"raw_queue_sustained_drops: {self._raw_consecutive_drops} consecutive")
-                    except Exception:  # noqa: BLE001
-                        pass
-                elif self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
-                    try:
-                        sg.trigger_storm(f"raw_queue_drops: {self._raw_consecutive_drops} consecutive")
-                    except Exception:  # noqa: BLE001
-                        pass
-                elif self._raw_drop_window_count >= self._raw_drop_window_threshold:
-                    try:
-                        msg = (
-                            f"raw_queue_drop_window: {self._raw_drop_window_count:.0f}"
-                            f" drops in {self._raw_drop_window_s}s window"
-                        )
-                        sg.trigger_storm(msg)
-                    except Exception:  # noqa: BLE001
-                        pass
-            # Signal FeatureEngine that data gaps occurred so downstream
-            # quality_flags include GAP (strategies can detect missing data).
-            fe = self.feature_engine
-            if fe is not None and self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
+    def _escalate_raw_drop(self, n: int = 1) -> None:
+        """Metric, log, leaky-bucket window and StormGuard escalation for ``n`` raw drops (loop thread)."""
+        if self.metrics_registry:
+            if n == 1:
+                self.metrics_registry.raw_queue_dropped_total.inc()
+            else:
+                self.metrics_registry.raw_queue_dropped_total.inc(n)
+        # Log on every 100th drop (1, 101, ...); a batch of n logs if it crossed one.
+        if (self._raw_dropped_count - 1) // 100 != (self._raw_dropped_count - 1 - n) // 100:
+            logger.warning(
+                "raw_queue full, dropping tick",
+                dropped=self._raw_dropped_count,
+                consecutive_drops=self._raw_consecutive_drops,
+                queue_size=self._raw_queue_size,
+            )
+        # Sliding window drop rate (leaky bucket): catches intermittent bursts
+        # that reset _raw_consecutive_drops.  O(1) time/memory, no allocations.
+        now_ns = timebase.now_ns()
+        if self._raw_drop_window_last_ns > 0:
+            dt_s = (now_ns - self._raw_drop_window_last_ns) / 1_000_000_000.0
+            decay = math.exp(-dt_s / self._raw_drop_window_s) if dt_s < self._raw_drop_window_s * 5 else 0.0
+            self._raw_drop_window_count = self._raw_drop_window_count * decay + float(n)
+        else:
+            self._raw_drop_window_count = float(n)
+        self._raw_drop_window_last_ns = now_ns
+
+        # Escalate to StormGuard on sustained drops
+        sg = self._storm_guard
+        if sg is not None:
+            if self._raw_consecutive_drops >= self._raw_drop_halt_threshold:
                 try:
-                    fe.mark_gap_all()
+                    sg.trigger_halt(f"raw_queue_sustained_drops: {self._raw_consecutive_drops} consecutive")
                 except Exception:  # noqa: BLE001
                     pass
+            elif self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
+                try:
+                    sg.trigger_storm(f"raw_queue_drops: {self._raw_consecutive_drops} consecutive")
+                except Exception:  # noqa: BLE001
+                    pass
+            elif self._raw_drop_window_count >= self._raw_drop_window_threshold:
+                try:
+                    msg = (
+                        f"raw_queue_drop_window: {self._raw_drop_window_count:.0f}"
+                        f" drops in {self._raw_drop_window_s}s window"
+                    )
+                    sg.trigger_storm(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+        # Signal FeatureEngine that data gaps occurred so downstream
+        # quality_flags include GAP (strategies can detect missing data).
+        fe = self.feature_engine
+        if fe is not None and self._raw_consecutive_drops >= self._raw_drop_degrade_threshold:
+            try:
+                fe.mark_gap_all()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _set_state(self, new_state: FeedState) -> None:
         if self.state != new_state:
@@ -2096,8 +2115,14 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                 ).inc()
             self._set_state(FeedState.DISCONNECTED)
             return False
+        if isinstance(getattr(self, "_md_shards", None), ShardedMDPipeline):
+            # P3: workers own LOB/feature state; the reset is queued on each owning worker, ordered
+            # with its events. If it cannot be applied the books are stale: do not report CONNECTED.
+            if not self._md_shards_reconnect_reset(drain_inputs=ok):
+                logger.error("md_shard_reconnect_reset_failed", reason=reason_label)
+                ok = False
         # Per-facade LOB/Feature reset via deferred _pending_warmup_reset.
-        if hasattr(self.client, "_apply_pending_resets"):
+        elif hasattr(self.client, "_apply_pending_resets"):
             self.client._apply_pending_resets()
         else:
             # Single-client mode: global reset on event loop (thread-safe).
