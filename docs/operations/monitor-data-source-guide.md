@@ -22,6 +22,7 @@ Signal Monitor TUI 支援多種資料來源組合，依據延遲需求與基礎�
 | `HFT_MONITOR_LIVE_ENABLED` | `0` | `1` = Engine 端啟用 Redis publisher |
 | `HFT_MONITOR_REDIS_HOST` | `localhost` | Redis 主機 |
 | `HFT_MONITOR_REDIS_PORT` | `6379` | Redis 埠號 |
+| `HFT_MONITOR_REDIS_MIN_INTERVAL_MS` | `0` | 每個 symbol 的最小發佈間隔 (毫秒)，`0` = 不節流 |
 | `HFT_MONITOR_REDIS_PASSWORD` | (空) | Redis 密碼 |
 | `HFT_MONITOR_HYBRID_BACKFILL_INTERVAL_S` | `30.0` | 混合模式下 CH 歷史回填間隔 (秒) |
 

@@ -14,6 +14,29 @@ Fix: **serialize-at-enqueue**. ``publish_market_data`` now snapshots the
 payload to immutable bytes on the caller's thread (engine loop) before
 putting it on ``self._queue``. The worker thread only handles opaque
 bytes, so no torn reads are possible regardless of downstream mutation.
+
+Optional per-symbol minimum publish interval
+--------------------------------------------
+``min_interval_ms`` (service env ``HFT_MONITOR_REDIS_MIN_INTERVAL_MS``,
+default 0) drops a tick when the previous tick **enqueued** for the same
+symbol is less than that many milliseconds old, measured with
+``time.monotonic_ns`` (injectable through ``clock_ns`` for tests). The
+check runs first in ``publish_market_data``, right after the existing
+empty-book / no-symbol guards and before any list copy or serialization, so a
+skipped tick costs one clock read and one dict lookup inside this method and
+reaches neither the queue nor the worker thread. The caller
+(``MarketDataService._publish_to_redis``) still refreshes its cached payload on
+every event, so the saving is the copy, serialization and enqueue only. Skipped
+ticks are counted in ``skipped``. A tick lost to a full queue opens no interval window: the drop
+path is unchanged and ``dropped`` still counts it.
+
+With 0 (the default) the clock is never read and every path behaves exactly as
+before. Content of an accepted tick is identical either way. What changes is
+volume: the monitor's per-symbol ring (``LPUSH`` + ``LTRIM`` to ``ring_size``)
+then holds fewer entries, at most one per interval, so a ring of
+``ring_size`` entries spans ``ring_size * min_interval_ms`` instead of
+``ring_size`` ticks. The ``latest`` key is likewise only as fresh as the last
+accepted tick: a tick skipped at the end of a burst is not published later.
 """
 
 from __future__ import annotations
@@ -22,6 +45,7 @@ import os
 import queue
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from structlog import get_logger
@@ -55,6 +79,10 @@ class MonitorLivePublisher:
         "_ring_keys",
         "_body_template",
         "_serialize_errors",
+        "_skipped",
+        "_min_interval_ns",
+        "_clock_ns",
+        "_last_accept_ns",
     )
 
     def __init__(
@@ -65,6 +93,8 @@ class MonitorLivePublisher:
         key_prefix: str = "monitor:l1",
         ring_size: int = 256,
         queue_size: int = 2048,
+        min_interval_ms: int = 0,
+        clock_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         self._client = RedisClient(host=host, port=port, password=password, timeout_s=_DEFAULT_TIMEOUT_S)
         self._key_prefix = key_prefix.rstrip(":")
@@ -78,6 +108,12 @@ class MonitorLivePublisher:
         self._last_heartbeat = 0.0
         self._published = 0
         self._serialize_errors = 0
+        # Per-symbol throttle (0 = off). The dict is created once; it holds one
+        # int per subscribed symbol, like ``_latest_keys`` / ``_ring_keys``.
+        self._skipped = 0
+        self._min_interval_ns = max(0, int(min_interval_ms)) * 1_000_000
+        self._clock_ns = clock_ns
+        self._last_accept_ns: dict[str, int] = {}
         # Pre-computed key caches (populated lazily per symbol)
         self._latest_keys: dict[str, str] = {}
         self._ring_keys: dict[str, str] = {}
@@ -100,6 +136,10 @@ class MonitorLivePublisher:
     @property
     def published(self) -> int:
         return self._published
+
+    @property
+    def skipped(self) -> int:
+        return self._skipped
 
     def start(self) -> None:
         if self._running:
@@ -131,6 +171,15 @@ class MonitorLivePublisher:
         symbol = str(payload.get("symbol", ""))
         if not symbol:
             return
+        # Per-symbol throttle: decided before any copy or serialization.
+        interval_ns = self._min_interval_ns
+        now_ns = 0
+        if interval_ns:
+            now_ns = self._clock_ns()
+            last_ns = self._last_accept_ns.get(symbol)
+            if last_ns is not None and now_ns - last_ns < interval_ns:
+                self._skipped += 1
+                return
         try:
             # Build a fresh normalized body and serialize while still holding
             # the GIL on the producer thread. ``list(...)`` creates a defensive
@@ -162,6 +211,9 @@ class MonitorLivePublisher:
             self._dropped += 1
             if self._dropped % 100 == 1:
                 logger.warning("monitor_live_drop", dropped=self._dropped)
+        else:
+            if interval_ns:
+                self._last_accept_ns[symbol] = now_ns
 
     def _run(self) -> None:
         while self._running:

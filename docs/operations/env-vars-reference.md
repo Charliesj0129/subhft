@@ -330,6 +330,7 @@ Shadow deployment note:
 | `HFT_MONITOR_LIVE_ENABLED` | `0` | `1` = 啟用 Redis live publisher（在 MarketDataService 中） | 需 Redis 可用 |
 | `HFT_MONITOR_REDIS_HOST` | `localhost` | Monitor Redis 主機 | — |
 | `HFT_MONITOR_REDIS_PORT` | `6379` | Monitor Redis 埠號 | — |
+| `HFT_MONITOR_REDIS_MIN_INTERVAL_MS` | `0` | 每個 symbol 的最小發佈間隔（毫秒），`0` = 不節流；非整數時記 warning 並視為 `0` | 節流會讓 Redis ring 變短，`latest` 可能停在最後一個被接受的 tick |
 | `HFT_MONITOR_REDIS_PASSWORD` | — | Monitor Redis 密碼 | 使用 secret manager |
 | `HFT_MONITOR_DATA_SOURCE` | `auto` | 資料源層級：`ch` / `shm` / `auto` | `auto` 自動偵測 SHM 可用性 |
 

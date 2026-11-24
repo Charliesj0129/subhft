@@ -731,9 +731,21 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
                 or os.getenv("REDIS_PASSWORD")
                 or ""
             )
-            self._redis_publisher = MonitorLivePublisher(host=host, port=port, password=password)
+            raw_min_interval = os.getenv("HFT_MONITOR_REDIS_MIN_INTERVAL_MS", "0")
+            try:
+                min_interval_ms = max(0, int(raw_min_interval))
+            except ValueError:
+                # A typo here must not take the whole monitor feed down: fall back to no throttle.
+                logger.warning("redis_publisher_min_interval_invalid", value=raw_min_interval)
+                min_interval_ms = 0
+            self._redis_publisher = MonitorLivePublisher(
+                host=host,
+                port=port,
+                password=password,
+                min_interval_ms=min_interval_ms,
+            )
             self._redis_publisher.start()
-            logger.info("redis_publisher_enabled", host=host, port=port)
+            logger.info("redis_publisher_enabled", host=host, port=port, min_interval_ms=min_interval_ms)
         except Exception as exc:
             logger.warning("redis_publisher_init_failed", error=str(exc))
             self._redis_publisher = None

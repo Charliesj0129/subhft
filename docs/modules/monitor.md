@@ -47,4 +47,5 @@ Terminal UI for live signal monitoring with dual data sources: ClickHouse (histo
 | `HFT_MONITOR_LIVE_ENABLED` | `0` | Enable Redis live publisher |
 | `HFT_MONITOR_REDIS_HOST` | `localhost` | Redis host |
 | `HFT_MONITOR_REDIS_PORT` | `6379` | Redis port |
+| `HFT_MONITOR_REDIS_MIN_INTERVAL_MS` | `0` | Per-symbol minimum publish interval in ms; `0` = no throttle |
 | `HFT_MONITOR_DATA_SOURCE` | `auto` | Data layer: `ch`/`shm`/`auto` |

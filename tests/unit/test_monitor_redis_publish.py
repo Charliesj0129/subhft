@@ -318,3 +318,278 @@ def test_concurrent_producer_and_consumer_no_torn_read() -> None:
     t_prod.join(timeout=5.0)
 
     assert not errors, f"found {len(errors)} torn reads; first: {errors[0]}"
+
+
+# ---------------------------------------------------------------------------
+# Per-symbol minimum publish interval (HFT_MONITOR_REDIS_MIN_INTERVAL_MS)
+# ---------------------------------------------------------------------------
+
+_MS = 1_000_000  # nanoseconds per millisecond
+
+
+class _FakeClock:
+    """Injectable monotonic clock in nanoseconds; tests advance it by hand."""
+
+    def __init__(self, now_ns: int = 0) -> None:
+        self.now_ns = now_ns
+        self.calls = 0
+
+    def __call__(self) -> int:
+        self.calls += 1
+        return self.now_ns
+
+
+def _throttled(min_interval_ms: int, clock: _FakeClock, queue_size: int = 64) -> MonitorLivePublisher:
+    pub = MonitorLivePublisher(
+        host="127.0.0.1",
+        port=6379,
+        queue_size=queue_size,
+        min_interval_ms=min_interval_ms,
+        clock_ns=clock,
+    )
+    pub._running = True  # simulate started without a worker thread
+    return pub
+
+
+def test_publish_default_interval_enqueues_every_call() -> None:
+    """Default (0) keeps today's behaviour: nothing is skipped."""
+    pub = MonitorLivePublisher(host="127.0.0.1", port=6379, queue_size=64)
+    pub._running = True
+    for i in range(50):
+        pub.publish_market_data(_make_payload(symbol="2330", ingest_ts=i))
+    assert pub._queue.qsize() == 50
+    assert pub.skipped == 0
+    assert pub.dropped == 0
+
+
+def test_publish_zero_interval_never_reads_the_clock() -> None:
+    """Interval 0 must cost nothing extra: the clock is not consulted."""
+    clock = _FakeClock()
+    pub = _throttled(0, clock)
+    for i in range(10):
+        pub.publish_market_data(_make_payload(ingest_ts=i))
+    assert pub._queue.qsize() == 10
+    assert clock.calls == 0
+    assert pub.skipped == 0
+
+
+def test_publish_negative_interval_means_no_throttle() -> None:
+    clock = _FakeClock()
+    pub = _throttled(-5, clock)
+    for i in range(10):
+        pub.publish_market_data(_make_payload(ingest_ts=i))
+    assert pub._queue.qsize() == 10
+    assert pub.skipped == 0
+
+
+def test_publish_skips_symbol_within_min_interval() -> None:
+    clock = _FakeClock(now_ns=10 * _MS)
+    pub = _throttled(100, clock)
+    # 1,000 calls for one symbol spread over 50 ms (50 us apart).
+    for i in range(1_000):
+        clock.now_ns = 10 * _MS + i * 50_000
+        pub.publish_market_data(_make_payload(symbol="TMFC6", ingest_ts=i))
+    assert pub._queue.qsize() == 1
+    assert pub.skipped == 999
+    symbol, _body = pub._queue.get_nowait()
+    assert symbol == "TMFC6"
+
+
+def test_publish_accepts_symbol_once_min_interval_elapsed() -> None:
+    clock = _FakeClock(now_ns=10 * _MS)
+    pub = _throttled(100, clock)
+    pub.publish_market_data(_make_payload(ingest_ts=1))
+    # One nanosecond short of the interval: still skipped.
+    clock.now_ns = 10 * _MS + 100 * _MS - 1
+    pub.publish_market_data(_make_payload(ingest_ts=2))
+    assert pub._queue.qsize() == 1
+    assert pub.skipped == 1
+    # Exactly the interval after the last accepted publish: accepted.
+    clock.now_ns = 10 * _MS + 100 * _MS
+    pub.publish_market_data(_make_payload(ingest_ts=3))
+    assert pub._queue.qsize() == 2
+    assert pub.skipped == 1
+    # The interval restarts from the accepted tick, not from the skipped one.
+    clock.now_ns = 10 * _MS + 199 * _MS
+    pub.publish_market_data(_make_payload(ingest_ts=4))
+    assert pub._queue.qsize() == 2
+    assert pub.skipped == 2
+
+
+def test_publish_interval_is_tracked_per_symbol() -> None:
+    clock = _FakeClock(now_ns=0)
+    pub = _throttled(100, clock)
+    pub.publish_market_data(_make_payload(symbol="AAA"))
+    clock.now_ns = 10 * _MS
+    # A second symbol is not held back by the first one's window.
+    pub.publish_market_data(_make_payload(symbol="BBB"))
+    assert pub._queue.qsize() == 2
+    clock.now_ns = 20 * _MS
+    pub.publish_market_data(_make_payload(symbol="AAA"))
+    pub.publish_market_data(_make_payload(symbol="BBB"))
+    assert pub._queue.qsize() == 2
+    assert pub.skipped == 2
+    # AAA's window ends at 100 ms, BBB's at 110 ms.
+    clock.now_ns = 105 * _MS
+    pub.publish_market_data(_make_payload(symbol="AAA"))
+    pub.publish_market_data(_make_payload(symbol="BBB"))
+    assert pub._queue.qsize() == 3
+    assert pub.skipped == 3
+    queued = [pub._queue.get_nowait()[0] for _ in range(3)]
+    assert queued == ["AAA", "BBB", "AAA"]
+
+
+def test_publish_skipped_tick_does_not_serialize(monkeypatch) -> None:
+    from hft_platform.monitor import _redis_publish
+
+    real_dumps = _redis_publish._dumps_bytes
+    calls: list[int] = []
+
+    def counting_dumps(obj: Any) -> bytes:
+        calls.append(1)
+        return real_dumps(obj)
+
+    monkeypatch.setattr(_redis_publish, "_dumps_bytes", counting_dumps)
+
+    clock = _FakeClock(now_ns=0)
+    pub = _throttled(100, clock)
+    pub.publish_market_data(_make_payload(ingest_ts=1))
+    assert len(calls) == 1
+    for i in range(1, 11):
+        clock.now_ns = i * _MS
+        pub.publish_market_data(_make_payload(ingest_ts=i + 1))
+    assert len(calls) == 1, "a skipped tick must not reach the serializer"
+    assert pub.skipped == 10
+    assert pub._queue.qsize() == 1
+
+
+def test_publish_accepted_tick_content_is_unchanged_by_throttle() -> None:
+    from hft_platform.utils import jsonfast
+
+    plain = MonitorLivePublisher(host="127.0.0.1", port=6379, queue_size=64)
+    plain._running = True
+    clock = _FakeClock(now_ns=0)
+    throttled = _throttled(100, clock)
+
+    payload = _make_payload(symbol="TXFD6", ingest_ts=777)
+    plain.publish_market_data(payload)
+    throttled.publish_market_data(payload)
+
+    plain_item = plain._queue.get_nowait()
+    throttled_item = throttled._queue.get_nowait()
+    assert plain_item == throttled_item
+    body = jsonfast.loads(throttled_item[1])
+    assert body == {
+        "symbol": "TXFD6",
+        "ingest_ts": 777,
+        "bids_price": [210_000_000],
+        "asks_price": [210_500_000],
+        "bids_vol": [10],
+        "asks_vol": [8],
+        "price_scaled": 0,
+        "volume": 1,
+    }
+
+
+def test_publish_skipped_counter_ignores_ticks_rejected_by_existing_checks() -> None:
+    clock = _FakeClock(now_ns=0)
+    pub = _throttled(100, clock)
+    pub.publish_market_data({"symbol": "2330", "ingest_ts": 1, "bids_price": [], "asks_price": [1]})
+    pub.publish_market_data({"symbol": "", "ingest_ts": 1, "bids_price": [1], "asks_price": [2]})
+    pub._running = False
+    pub.publish_market_data(_make_payload())
+    assert pub.skipped == 0
+    assert pub._queue.empty()
+    assert clock.calls == 0, "rejected ticks must not consume a throttle window"
+
+
+def test_publish_queue_full_drop_does_not_consume_the_interval() -> None:
+    """A tick lost to a full queue was never published, so it opens no window."""
+    clock = _FakeClock(now_ns=0)
+    pub = _throttled(100, clock, queue_size=64)
+    for i in range(64):
+        pub.publish_market_data(_make_payload(symbol=f"S{i}"))
+    assert pub._queue.full()
+    assert pub.dropped == 0
+    pub.publish_market_data(_make_payload(symbol="OVER"))
+    pub.publish_market_data(_make_payload(symbol="OVER"))
+    assert pub.dropped == 2
+    assert pub.skipped == 0
+    # Once the queue has room, the dropped symbol is accepted straight away.
+    pub._queue.get_nowait()
+    pub.publish_market_data(_make_payload(symbol="OVER"))
+    assert pub.dropped == 2
+    assert pub._queue.full()
+
+
+def test_publish_throttles_with_real_monotonic_clock_by_default() -> None:
+    """No injected clock: time.monotonic_ns is used; a huge interval keeps this sleep-free."""
+    pub = MonitorLivePublisher(host="127.0.0.1", port=6379, queue_size=64, min_interval_ms=3_600_000)
+    pub._running = True
+    pub.publish_market_data(_make_payload(symbol="2330"))
+    pub.publish_market_data(_make_payload(symbol="2330"))
+    assert pub._queue.qsize() == 1
+    assert pub.skipped == 1
+
+
+class _InitSelf:
+    """Minimal stand-in for MarketDataService when calling _init_redis_publisher."""
+
+    def __init__(self) -> None:
+        self._redis_publisher: Any = None
+
+
+class _RecordingPublisher:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.started = False
+
+    def start(self) -> None:
+        self.started = True
+
+
+def _run_init_redis_publisher(monkeypatch, interval_env: str | None) -> _RecordingPublisher:
+    from hft_platform.monitor import _redis_publish
+    from hft_platform.services.market_data import MarketDataService
+
+    created: list[_RecordingPublisher] = []
+
+    def factory(**kwargs: Any) -> _RecordingPublisher:
+        created.append(_RecordingPublisher(**kwargs))
+        return created[-1]
+
+    monkeypatch.setenv("HFT_MONITOR_LIVE_ENABLED", "1")
+    monkeypatch.setenv("HFT_MONITOR_REDIS_HOST", "monitor-redis.invalid")
+    monkeypatch.setenv("HFT_MONITOR_REDIS_PORT", "6380")
+    if interval_env is None:
+        monkeypatch.delenv("HFT_MONITOR_REDIS_MIN_INTERVAL_MS", raising=False)
+    else:
+        monkeypatch.setenv("HFT_MONITOR_REDIS_MIN_INTERVAL_MS", interval_env)
+    monkeypatch.setattr(_redis_publish, "MonitorLivePublisher", factory)
+
+    fake_self = _InitSelf()
+    init: Any = MarketDataService._init_redis_publisher
+    init(fake_self)
+    assert len(created) == 1
+    assert fake_self._redis_publisher is created[0]
+    return created[0]
+
+
+def test_init_redis_publisher_min_interval_defaults_to_zero(monkeypatch) -> None:
+    pub = _run_init_redis_publisher(monkeypatch, None)
+    assert pub.kwargs["min_interval_ms"] == 0
+    assert pub.kwargs["host"] == "monitor-redis.invalid"
+    assert pub.kwargs["port"] == 6380
+    assert pub.started is True
+
+
+def test_init_redis_publisher_reads_min_interval_env(monkeypatch) -> None:
+    pub = _run_init_redis_publisher(monkeypatch, "250")
+    assert pub.kwargs["min_interval_ms"] == 250
+    assert pub.started is True
+
+
+def test_init_redis_publisher_invalid_min_interval_falls_back_to_zero(monkeypatch) -> None:
+    pub = _run_init_redis_publisher(monkeypatch, "100ms")
+    assert pub.kwargs["min_interval_ms"] == 0
+    assert pub.started is True
