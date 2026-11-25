@@ -117,7 +117,7 @@ def main(argv: Sequence[str] | None = None, *, now: dt.datetime | None = None) -
     finally:
         src.close()
     log.info("ingest_done", command=args.command, dry_run=args.dry_run, **stats)
-    return 0
+    return int(any(stats.get(key, 0) for key in ("FAILED", "failed", "failed_products")))
 
 
 if __name__ == "__main__":

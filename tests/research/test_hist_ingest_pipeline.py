@@ -434,3 +434,51 @@ def test_cli_returns_nonzero_and_still_logs_out_when_the_usage_query_fails(monke
     now = dt.datetime(2026, 11, 20, 15, 30, tzinfo=TAIPEI)
     assert cli.main(["ticks", "--since", "2026-11-20", "--env-file", "/nonexistent"], now=now) == 1
     assert (api.requested_days, closed, client.calls) == ([], [True], [])
+
+
+@pytest.mark.parametrize("remaining", [2 * 1024 * MB, 500 * MB, 500 * MB - 1])
+def test_quota_guard_uses_remaining_bytes_at_scheduled_floor(remaining):
+    api = FakeShioaji(remaining=(remaining,))
+    api.usage = lambda: SimpleNamespace(bytes=0, limit_bytes=2 * 1024 * MB, remaining_bytes=remaining)
+    src, store, client = setup(api)
+    stats = run_ticks(src, store, since=FRI, min_remaining_bytes=500 * MB)
+    assert src.remaining_bytes() == remaining
+    assert api.requested_days == ([FRI] if remaining >= 500 * MB else [])
+    assert client.marks[("shioaji", "TXF", "ticks", FRI)] == ("DONE" if remaining >= 500 * MB else "PENDING_QUOTA")
+    assert stats["calls"] == (1 if remaining >= 500 * MB else 0)
+
+
+def test_pending_quota_day_retries_after_usage_replenishes():
+    api = FakeShioaji(remaining=(500 * MB - 1,))
+    src, store, client = setup(api)
+    first = run_ticks(src, store, since=FRI, min_remaining_bytes=500 * MB)
+    assert first["PENDING_QUOTA"] == 1
+    assert api.requested_days == []
+    api.remaining = [2 * 1024 * MB]
+    second = run_ticks(src, store, since=FRI, min_remaining_bytes=500 * MB)
+    assert second["calls"] == 1
+    assert api.requested_days == [FRI]
+    assert client.marks[("shioaji", "TXF", "ticks", FRI)] == "DONE"
+
+
+def test_cli_converts_scheduled_500_mib_floor_to_bytes(monkeypatch):
+    floors = []
+    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: object())
+    monkeypatch.setattr(cli.shioaji_source.ShioajiSource, "connect", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(cli, "_ingest", lambda args, src, store: floors.append(args.floor) or {})
+    now = dt.datetime(2026, 11, 25, 14, 20, 6, tzinfo=TAIPEI)
+    assert cli.main(["ticks", "--min-remaining-mb", "500", "--env-file", "/nonexistent"], now=now) == 0
+    assert floors == [524288000]
+
+
+@pytest.mark.parametrize("stats", [{"FAILED": 1}, {"failed": 1}, {"failed_products": 1}])
+def test_cli_returns_nonzero_for_failed_ingest_stats(monkeypatch, stats):
+    closed = []
+    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: object())
+    monkeypatch.setattr(
+        cli.shioaji_source.ShioajiSource, "connect", lambda: SimpleNamespace(close=lambda: closed.append(True))
+    )
+    monkeypatch.setattr(cli, "_ingest", lambda args, src, store: stats)
+    now = dt.datetime(2026, 11, 25, 14, 20, 6, tzinfo=TAIPEI)
+    assert cli.main(["ticks", "--env-file", "/nonexistent"], now=now) == 1
+    assert closed == [True]

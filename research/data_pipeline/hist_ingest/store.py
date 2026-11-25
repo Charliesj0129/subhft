@@ -48,6 +48,10 @@ _SUMMARY_SQL = (
 )
 
 
+def clickhouse_endpoint() -> tuple[str, int]:
+    return os.getenv("HFT_CLICKHOUSE_HOST", "localhost"), int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
+
+
 class HistStore:
     """Thin writer over a ``clickhouse_connect`` client. ``dry_run`` skips every write; reads still happen."""
 
@@ -65,9 +69,10 @@ class HistStore:
     def from_env(cls, *, dry_run: bool = False) -> HistStore:
         import clickhouse_connect
 
+        host, port = clickhouse_endpoint()
         client = clickhouse_connect.get_client(
-            host=os.getenv("HFT_CLICKHOUSE_HOST", "localhost"),
-            port=int(os.getenv("HFT_CLICKHOUSE_PORT", "8123")),
+            host=host,
+            port=port,
             username=os.getenv("HFT_CLICKHOUSE_USER", "default"),
             password=os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD", ""),
         )
@@ -162,8 +167,9 @@ def run_kbar_windows(
     """Windows of at most ``chunk_days`` calendar days from the oldest pending weekday up to ``until``.
 
     Every weekday of a window gets a watermark counted by TAIFEX trading day (trading_day_of; 0 is EMPTY). The fetch
-    starts NIGHT_LOOKBACK_DAYS earlier so the previous evening's night session (Friday night for a Monday) is included. A window that raises
-    SourceError is marked FAILED, and three failures stop the loop. Overlapping re-fetches are harmless.
+    starts NIGHT_LOOKBACK_DAYS earlier so the previous evening's night session (Friday night for a Monday) is included.
+    A window that raises SourceError is marked FAILED, and three failures stop the loop.
+    Overlapping re-fetches are harmless.
     """
     totals: Counter[str] = Counter()
     pending = store.pending_days(source, product, "kbars", weekdays(since, until), force=force)

@@ -19,9 +19,10 @@ exec 9>"$LOG_DIR/.$JOB.lock"
 flock -n 9 || { echo "$(date -Is) $JOB already running" >>"$LOG"; exit 0; }
 cd "$WT"
 [ -f "$HOME/.claude/bin/ck-env.sh" ] && . "$HOME/.claude/bin/ck-env.sh" 2>/dev/null
-docker ps --format '{{.Names}}' | grep -qx clickhouse || { docker start clickhouse >/dev/null && sleep 10; }
+docker ps --format '{{.Names}}' 2>/dev/null | grep -qx clickhouse || { docker start clickhouse >/dev/null 2>&1 || true; }
+"$PY" -m research.data_pipeline.hist_ingest.readiness --env-file "$ENV_FILE" >>"$LOG" 2>&1 || exit 1
 
-ingest() { "$PY" -m research.data_pipeline.hist_ingest "$@" --env-file "$ENV_FILE" 2>&1 | grep -v -E 'Response Code|Info:' | tee -a "$LOG"; }
+ingest() { "$PY" -m research.data_pipeline.hist_ingest "$@" --env-file "$ENV_FILE" 2>&1 | sed -E '/Response Code|Info:/d' | tee -a "$LOG"; }
 
 echo "$(date -Is) start $JOB" >>"$LOG"
 case "$JOB" in
@@ -33,9 +34,15 @@ case "$JOB" in
     for round in $(seq 1 "$MAX_ROUNDS"); do
       progressed=0
       for spec in TXF:2020-03-23 MXF:2020-03-23 TMF:2024-07-29; do
-        out="$(ingest ticks --products "${spec%%:*}" --since "${spec#*:}" --max-tick-days "$ROUND_DAYS" \
-          --min-remaining-mb "$MIN_REMAINING_MB")" || true
-        grep -q 'PENDING_QUOTA\|intraday\|refus' <<<"$out" && { echo "$(date -Is) stop: quota/session" >>"$LOG"; exit 0; }
+        if out="$(ingest ticks --products "${spec%%:*}" --since "${spec#*:}" --max-tick-days "$ROUND_DAYS" \
+          --min-remaining-mb "$MIN_REMAINING_MB")"; then
+          :
+        else
+          status=$?
+          echo "$(date -Is) stop: ingest failed (exit $status)" >>"$LOG"
+          exit "$status"
+        fi
+        grep -q 'ingest_done.*PENDING_QUOTA=[1-9]' <<<"$out" && { echo "$(date -Is) stop: quota" >>"$LOG"; exit 0; }
         grep -q 'calls=[1-9]' <<<"$out" && progressed=1
       done
       [ "$progressed" = 1 ] || break
