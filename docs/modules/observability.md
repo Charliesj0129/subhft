@@ -32,7 +32,7 @@ metrics.update_system_metrics()  # CPU + memory gauges
 | Market Data | `feed_events_total`, `feed_latency_ns`, `normalization_errors_total` |
 | Strategy | `strategy_latency_ns`, `strategy_intents_total`, `strategy_exceptions_total` |
 | Risk | `risk_reject_total`, `stormguard_mode`, `stormguard_transitions_total` |
-| Order | `order_actions_total`, `order_reject_total`, `shadow_orders_total` |
+| Order | `order_path_enabled`, `order_actions_total`, `order_reject_total`, `shadow_orders_total` |
 | Execution | `fills_total`, `duplicate_fill_total`, `e2e_order_latency_ns` |
 | Recording | `recorder_batches_flushed_total`, `recorder_ch_insert_latency_ms` |
 | Reconciliation | `reconciliation_sync_total`, `position_drift_qty` |

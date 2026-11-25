@@ -1058,6 +1058,7 @@ class HFTSystem:
                 order_mode = resolve_order_mode()
                 self.order_mode = order_mode
             orders_enabled = order_mode != "disabled"
+            MetricsRegistry.get().order_path_enabled.set(1 if orders_enabled else 0)
 
             # Login order_client (separate Shioaji session for execution).
             # md_client logs in via MarketDataService._connect_sequence(), but

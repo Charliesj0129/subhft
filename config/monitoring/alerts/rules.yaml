@@ -840,7 +840,7 @@ groups:
   # gateway that dies while the platform is NOT halted, which is the only case
   # where a dead gateway is news.
   - alert: ExecutionGatewayTaskDown
-    expr: max_over_time(execution_gateway_alive[2m]) < 1 and on() stormguard_mode != 3
+    expr: (max_over_time(execution_gateway_alive[2m]) < 1 and on() stormguard_mode != 3) unless on(job, instance) (order_path_enabled == 0)
     for: 1m
     labels:
         severity: critical
@@ -849,7 +849,7 @@ groups:
         description: "execution_gateway_alive has been 0 for more than 1 minute while StormGuard was not HALTed."
 
   - alert: ExecutionRouterTaskDown
-    expr: max_over_time(execution_router_alive[2m]) < 1
+    expr: (max_over_time(execution_router_alive[2m]) < 1) unless on(job, instance) (order_path_enabled == 0)
     for: 1m
     labels:
         severity: critical
@@ -1533,8 +1533,9 @@ groups:
   #
   - alert: StrategyNotProcessingEvents
     expr: |
-      (sum by (strategy_id) (increase(strategy_events_received_total[15m])) == 0)
-      and on() market_trading_hours_active == 1
+      ((sum by (job, instance, strategy_id) (increase(strategy_events_received_total[15m])) == 0)
+      and on(job, instance) market_trading_hours_active == 1)
+      unless on(job, instance) (order_path_enabled == 0)
     for: 10m
     labels:
       severity: warning

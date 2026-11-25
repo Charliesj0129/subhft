@@ -232,6 +232,7 @@ class MetricsRegistry:
                 _pn("execution_router_errors_total"),
                 _pn("execution_gateway_errors_total"),
                 _pn("execution_router_lag_ns"),
+                _pn("order_path_enabled"),
                 _pn("execution_router_alive"),
                 _pn("execution_gateway_alive"),
                 _pn("execution_router_heartbeat_ts"),
@@ -1043,6 +1044,8 @@ class MetricsRegistry:
             "Execution report lag (ns)",
             buckets=[100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000, 500_000_000],
         )
+        self.order_path_enabled = Gauge(_pn("order_path_enabled"), "Order path enabled (1) or explicitly disabled (0)")
+        self.order_path_enabled.set(1)
         self.execution_router_alive = Gauge(_pn("execution_router_alive"), "Execution router task alive (1/0)")
         self.execution_gateway_alive = Gauge(_pn("execution_gateway_alive"), "Execution gateway task alive (1/0)")
         self.execution_router_heartbeat_ts = Gauge(

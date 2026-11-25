@@ -108,6 +108,53 @@ def _make_system():
             return sys_obj
 
 
+def _mock_startup_executor(monkeypatch):
+    loop = asyncio.get_running_loop()
+
+    def _run_in_executor(_executor, func):
+        result = loop.create_future()
+        result.set_result(func())
+        return result
+
+    monkeypatch.setattr(loop, "run_in_executor", _run_in_executor)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order_mode, expected", [("disabled", 0), ("sim", 1), ("live", 1)])
+@pytest.mark.parametrize("cached", [False, True], ids=["resolve_at_run", "resolved_at_init"])
+async def test_order_path_gauge_records_resolved_startup_mode(monkeypatch, order_mode, expected, cached):
+    from hft_platform.observability.metrics import MetricsRegistry
+    from hft_platform.services.system import HFTSystem
+
+    monkeypatch.setenv("HFT_ORDER_MODE", "sim" if cached else order_mode)
+    sys_obj = _make_system()
+    if cached:
+        sys_obj.order_mode = order_mode
+    metrics = MetricsRegistry.get()
+    gauge = getattr(metrics, "order_path_enabled", None)
+    assert gauge is not None
+    set_gauge = MagicMock(wraps=gauge.set)
+    monkeypatch.setattr(gauge, "set", set_gauge)
+    sys_obj.order_client.login.return_value = True
+    _mock_startup_executor(monkeypatch)
+    sys_obj.session_governor = None
+    sys_obj.position_stuck_monitor = None
+    sys_obj.stop_async = AsyncMock()
+
+    def _start_service(name, coro):
+        coro.close()
+        if name == "recorder":
+            raise RuntimeError("startup metric captured")
+
+    sys_obj._start_service = _start_service
+    with pytest.raises(RuntimeError, match="startup metric captured"):
+        await HFTSystem.run(sys_obj)
+
+    assert sys_obj.order_mode == order_mode
+    assert gauge._value.get() == expected
+    set_gauge.assert_called_once_with(expected)
+
+
 # ---------------------------------------------------------------------------
 # Static helpers
 # ---------------------------------------------------------------------------
@@ -282,7 +329,8 @@ def test_teardown_bootstrap_teardown_raises():
 
 
 @pytest.mark.asyncio
-async def test_run_early_exception_does_not_trip_gc_cleanup():
+async def test_run_early_exception_does_not_trip_gc_cleanup(monkeypatch):
+    _mock_startup_executor(monkeypatch)
     sys_obj = _make_system()
     sys_obj.session_governor = SimpleNamespace(start=AsyncMock(side_effect=RuntimeError("boom")))
     sys_obj.autonomy_monitor = None
@@ -300,6 +348,7 @@ async def test_run_early_exception_does_not_trip_gc_cleanup():
 
 @pytest.mark.asyncio
 async def test_run_starts_health_before_live_order_login_and_stops_on_false(monkeypatch):
+    _mock_startup_executor(monkeypatch)
     monkeypatch.setenv("HFT_ORDER_MODE", "live")
     sys_obj = _make_system()
     events = []

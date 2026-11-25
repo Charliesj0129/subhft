@@ -138,6 +138,8 @@ python3 scripts/soak_acceptance.py daily \
    - `ShioajiSessionLockConflictDetected`
    - `ShioajiLoginFailuresDetected`
 
+`ExecutionGatewayTaskDown`、`ExecutionRouterTaskDown` 及 `StrategyNotProcessingEvents` 只在相同 `job` / `instance` 的 `order_path_enabled == 0` 時抑制；只有已解析的 `disabled` 模式會設為 0。`sim` / `live` 或指標缺失時仍會告警。
+
 ## E. 事件處置最短路徑
 
 1. 若 `execution_*_alive == 0`：先看 `hft-engine` logs 是否連續 crash/restart。
