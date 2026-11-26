@@ -113,8 +113,8 @@ def convert_candles(resp: Any, *, product: str, ingest_ts: int) -> tuple[str, li
     try:
         rows = []
         data = _get(resp, "data")
-        if data is None:
-            raise SourceError("fubon candles reply has no data field")
+        if not isinstance(data, list):
+            raise SourceError("fubon candles reply has no usable data list")
         for c in data:
             ts = iso_to_utc_ns(_get(c, "date"))
             prices = (scale_price(_get(c, k)) for k in ("open", "high", "low", "close"))

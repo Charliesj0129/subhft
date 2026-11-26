@@ -16,7 +16,7 @@ import datetime as dt
 import functools
 import os
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import structlog
@@ -115,10 +115,15 @@ class ShioajiSource:
 def _columns(raw: Any, names: Sequence[str], what: str) -> list[list[Any]]:
     """The ``ts`` column followed by ``names``; every column must be as long as ``ts``."""
     cols = [raw.get(n) if isinstance(raw, dict) else getattr(raw, n, None) for n in ("ts", *names)]
-    cols = [[] if c is None else list(c) for c in cols]
-    if any(len(c) != len(cols[0]) for c in cols):
-        raise SourceError(f"{what} columns differ in length: {[len(c) for c in cols]}")
-    return cols
+    if any(c is None or isinstance(c, (Mapping, str, bytes, bytearray, set, frozenset)) for c in cols):
+        raise SourceError(f"{what} reply has missing or unusable columns")
+    try:
+        columns: list[list[Any]] = [list(c) for c in cols]
+    except TypeError as exc:
+        raise SourceError(f"{what} reply has non-iterable columns") from exc
+    if any(len(c) != len(columns[0]) for c in columns):
+        raise SourceError(f"{what} columns differ in length: {[len(c) for c in columns]}")
+    return columns
 
 
 def convert_ticks(
@@ -208,8 +213,16 @@ def ingest_ticks(
                 mark(PENDING_QUOTA, usage_bytes_after=after, note="empty result with usage below floor")
                 stats[PENDING_QUOTA] += 1
                 return stats
-            stats["rows"] += store.insert(rows)
-            mark(None, rows_by_day={day: len(rows)}, usage_bytes_after=after)
+            try:
+                stats["rows"] += store.replace_days(
+                    SOURCE, product, "ticks", [day], rows, contract_code=code, usage_bytes_after=after
+                )
+            except SourceError as exc:
+                mark(FAILED, note=str(exc)[:200])
+                stats[FAILED] += 1
+                if stats[FAILED] >= MAX_FAILURES:
+                    return stats
+                continue
             stats["done" if rows else "empty"] += 1
     return stats
 

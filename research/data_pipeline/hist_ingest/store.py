@@ -1,8 +1,10 @@
 """ClickHouse writer, watermark reads and writes, and the K-bar window loop shared by both sources.
 
 Connection env, as in research/data_pipeline: HFT_CLICKHOUSE_HOST, HFT_CLICKHOUSE_PORT (HTTP, default 8123),
-HFT_CLICKHOUSE_USER, HFT_CLICKHOUSE_PASSWORD. Rows are inserted BEFORE the DONE watermark that describes them, so a
-crash in between leaves a day that is fetched again (ReplacingMergeTree replaces it, never duplicates).
+HFT_CLICKHOUSE_USER, HFT_CLICKHOUSE_PASSWORD. Each refetch replaces complete trading-day snapshots: mark FAILED,
+wait for the old slice's deletion, insert the new rows, then mark DONE/EMPTY. A crash leaves the slice retryable.
+This requires a single writer per source/product/kind. Replacement is not atomic for readers: they can see an empty
+or partial slice until its final watermark is written; a successful watermark does not isolate concurrent reads.
 """
 
 from __future__ import annotations
@@ -21,10 +23,12 @@ from .model import (
     EMPTY,
     FAILED,
     SKIP_STATUSES,
+    TAIPEI,
     KbarRow,
     SourceError,
     TickRow,
     WatermarkRow,
+    iso_to_utc_ns,
     trading_day_of,
     weekdays,
 )
@@ -85,6 +89,69 @@ class HistStore:
             for i in range(0, len(rows), self.batch_rows):
                 self.client.insert(table, rows[i : i + self.batch_rows], column_names=list(columns))
         return len(rows)
+
+    def replace_days(
+        self,
+        source: str,
+        product: str,
+        kind: str,
+        days: Sequence[dt.date],
+        rows: Sequence[Any],
+        *,
+        contract_code: str = "",
+        usage_bytes_after: int = -1,
+    ) -> int:
+        """Replace a contiguous weekday window, including a valid empty reply.
+
+        K-bar lookback rows outside this window are excluded: their trading days may only be partially fetched.
+        ``mutations_sync=1`` waits for completion on this server (the existing tables are unreplicated).
+        All slice values are bound parameters; table names come only from the fixed table map.
+        """
+        if not days:
+            return 0
+        first, last = min(days), max(days)
+        if list(days) != weekdays(first, last):
+            raise SourceError("snapshot days must be a contiguous ascending weekday window")
+        params: dict[str, Any] = {"source": source, "product": product}
+        if kind == "ticks":
+            selected = [r for r in rows if r.trading_day in days]
+            table = TABLES[TickRow][0]
+            params.update(start=first, end=last)
+            predicate = "trading_day >= {start:Date} AND trading_day <= {end:Date}"
+            counts = Counter(r.trading_day for r in selected)
+        elif kind == "kbars":
+            selected = [r for r in rows if trading_day_of(r.bar_ts) in days]
+            table = TABLES[KbarRow][0]
+            previous = first - dt.timedelta(days=1)
+            while previous.weekday() >= 5:
+                previous -= dt.timedelta(days=1)
+            start = dt.datetime.combine(previous, dt.time(15), tzinfo=TAIPEI)
+            end = dt.datetime.combine(last, dt.time(15), tzinfo=TAIPEI)
+            params.update(start=iso_to_utc_ns(start.isoformat()), end=iso_to_utc_ns(end.isoformat()), timeframe=1)
+            predicate = "timeframe_min = {timeframe:UInt16} AND bar_ts >= {start:Int64} AND bar_ts < {end:Int64}"
+            counts = Counter(trading_day_of(r.bar_ts) for r in selected)
+        else:
+            raise SourceError("unknown snapshot kind")
+        try:
+            # Invalidate even an old DONE/EMPTY before any destructive operation, including --force.
+            self.mark_days(source, product, kind, days, FAILED, note="snapshot replacement in progress")
+            if not self.dry_run:
+                sql = f"ALTER TABLE {table} DELETE WHERE source = {{source:String}} AND product = {{product:String}} "
+                self.client.command(sql + "AND " + predicate, parameters=params, settings={"mutations_sync": 1})
+            count = self.insert(selected)
+            self.mark_days(
+                source,
+                product,
+                kind,
+                days,
+                None,
+                rows_by_day=dict(counts),
+                contract_code=contract_code,
+                usage_bytes_after=usage_bytes_after,
+            )
+        except Exception as exc:
+            raise SourceError(f"snapshot replacement failed: {type(exc).__name__}") from exc
+        return count
 
     def pending_days(
         self, source: str, product: str, kind: str, days: Sequence[dt.date], *, force: bool
@@ -169,7 +236,7 @@ def run_kbar_windows(
     Every weekday of a window gets a watermark counted by TAIFEX trading day (trading_day_of; 0 is EMPTY). The fetch
     starts NIGHT_LOOKBACK_DAYS earlier so the previous evening's night session (Friday night for a Monday) is included.
     A window that raises SourceError is marked FAILED, and three failures stop the loop.
-    Overlapping re-fetches are harmless.
+    Only trading days in the window are replaced; partial lookback days are never inserted.
     """
     totals: Counter[str] = Counter()
     pending = store.pending_days(source, product, "kbars", weekdays(since, until), force=force)
@@ -179,6 +246,29 @@ def run_kbar_windows(
         days, pending = weekdays(start, end), [d for d in pending if d > end]
         try:
             result = fetch(start - dt.timedelta(days=NIGHT_LOOKBACK_DAYS), end)
+            if result.status is None:
+                count = store.replace_days(
+                    source,
+                    product,
+                    "kbars",
+                    days,
+                    result.rows,
+                    contract_code=result.contract_code,
+                    usage_bytes_after=result.usage_bytes_after,
+                )
+            else:
+                # Quota/stopped responses are not complete snapshots and must retain existing rows.
+                count = 0
+                store.mark_days(
+                    source,
+                    product,
+                    "kbars",
+                    days,
+                    result.status,
+                    contract_code=result.contract_code,
+                    usage_bytes_after=result.usage_bytes_after,
+                    note=result.note,
+                )
         except SourceError as exc:
             log.error(
                 "kbars_window_failed", source=source, product=product, start=str(start), end=str(end), error=str(exc)
@@ -186,21 +276,8 @@ def run_kbar_windows(
             store.mark_days(source, product, "kbars", days, FAILED, note=str(exc)[:200])
             totals["failed"] += 1
             continue
-        store.insert(result.rows)
-        by_day = Counter(trading_day_of(r.bar_ts) for r in result.rows)
-        store.mark_days(
-            source,
-            product,
-            "kbars",
-            days,
-            result.status,
-            rows_by_day=dict(by_day),
-            contract_code=result.contract_code,
-            usage_bytes_after=result.usage_bytes_after,
-            note=result.note,
-        )
         totals["windows"] += 1
-        totals["rows"] += len(result.rows)
+        totals["rows"] += count
         if result.stop:
             totals["stopped"] += 1
             break

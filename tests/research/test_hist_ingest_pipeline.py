@@ -12,7 +12,7 @@ from research.data_pipeline.hist_ingest import __main__ as cli
 from research.data_pipeline.hist_ingest import fubon_source, shioaji_source
 from research.data_pipeline.hist_ingest.model import TAIPEI, SourceError
 from research.data_pipeline.hist_ingest.ratelimit import RateLimiter
-from research.data_pipeline.hist_ingest.store import HistStore
+from research.data_pipeline.hist_ingest.store import HistStore, WindowResult, run_kbar_windows
 
 NS = 1_000_000_000
 MB = 1024 * 1024
@@ -29,12 +29,55 @@ class FakeClient:
 
     def __init__(self):
         self.calls, self.marks = [], {}
+        self.tables, self.commands, self.events = {}, [], []
+        self.fail_delete = False
+        self.fail_insert_at = None
+        self.data_inserts = 0
 
     def insert(self, table, data, column_names=None):
+        self.events.append(("insert", table))
+        if table != "hft.hist_ingest_watermark":
+            self.data_inserts += 1
+            if self.data_inserts == self.fail_insert_at:
+                raise RuntimeError("insert failed")
         self.calls.append((table, list(data), list(column_names)))
+        self.tables.setdefault(table, []).extend(data)
         if table == "hft.hist_ingest_watermark":
             for row in data:
                 self.marks[(row[0], row[1], row[2], row[3])] = row[4]
+
+    def command(self, sql, parameters=None, settings=None):
+        self.commands.append((sql, parameters, settings))
+        self.events.append(("delete", sql.split()[2]))
+        if self.fail_delete:
+            raise RuntimeError("delete failed")
+        assert settings == {"mutations_sync": 1}
+        table = sql.split()[2]
+        p = parameters
+
+        def deleted(row):
+            if (row.source, row.product) != (p["source"], p["product"]):
+                return False
+            if table == "hft.hist_ticks":
+                return p["start"] <= row.trading_day <= p["end"]
+            assert table == "hft.hist_kbars"
+            return row.timeframe_min == p["timeframe"] and p["start"] <= row.bar_ts < p["end"]
+
+        self.tables[table] = [row for row in self.tables.get(table, []) if not deleted(row)]
+
+    def final(self, table):
+        # ReplacingMergeTree FINAL only replaces matching order keys.
+        keys = (
+            ("source", "product", "trading_day", "exch_ts", "seq")
+            if table == "hft.hist_ticks"
+            else ("source", "product", "timeframe_min", "bar_ts")
+        )
+        latest = {}
+        for row in self.tables.get(table, []):
+            key = tuple(getattr(row, field) for field in keys)
+            if key not in latest or row.ingest_ts >= latest[key].ingest_ts:
+                latest[key] = row
+        return list(latest.values())
 
     def query(self, sql, parameters=None):
         p = parameters
@@ -184,9 +227,9 @@ def test_tick_rows_are_scaled_utc_and_classified_by_session():
 def test_rows_are_inserted_before_the_done_watermark():
     src, store, client = setup()
     run_ticks(src, store, until=FRI, since=FRI)
-    assert [t for t, _, _ in client.calls] == ["hft.hist_ticks", "hft.hist_ingest_watermark"]
-    assert client.calls[1][1][0].status == "DONE"
-    assert client.calls[1][1][0].rows == 3
+    assert [t for t, _, _ in client.calls][-2:] == ["hft.hist_ticks", "hft.hist_ingest_watermark"]
+    assert client.calls[-1][1][0].status == "DONE"
+    assert client.calls[-1][1][0].rows == 3
 
 
 def test_insert_batches_are_capped_and_use_the_migration_column_names():
@@ -482,3 +525,193 @@ def test_cli_returns_nonzero_for_failed_ingest_stats(monkeypatch, stats):
     now = dt.datetime(2026, 11, 25, 14, 20, 6, tzinfo=TAIPEI)
     assert cli.main(["ticks", "--env-file", "/nonexistent"], now=now) == 1
     assert closed == [True]
+
+
+@pytest.mark.parametrize("kind", ["ticks", "kbars"])
+@pytest.mark.parametrize("reply", [None, SimpleNamespace(), {}, {"ts": []}, {"error": "unavailable"}, {"ts": 1}])
+def test_shioaji_malformed_reply_marks_failed_not_empty(kind, reply):
+    src, store, client = setup()
+    setattr(src.api, kind, lambda **kwargs: reply)
+    ingest_snapshot(kind, src, store)
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == "FAILED"
+    assert client.final("hft.hist_" + kind) == []
+
+
+@pytest.mark.parametrize(
+    "kind,names",
+    [
+        ("ticks", ("ts", "close", "volume", "bid_price", "ask_price", "tick_type")),
+        ("kbars", ("ts", "Open", "High", "Low", "Close", "Volume")),
+    ],
+)
+@pytest.mark.parametrize("object_reply", [False, True])
+@pytest.mark.parametrize("column", [[], None, {}, ""])
+def test_shioaji_empty_columns_require_present_sequences(kind, names, object_reply, column):
+    src, store, client = setup()
+    reply = dict.fromkeys(names, column)
+    if object_reply:
+        reply = SimpleNamespace(**reply)
+    setattr(src.api, kind, lambda **kwargs: reply)
+    ingest_snapshot(kind, src, store)
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == ("EMPTY" if column == [] else "FAILED")
+
+
+@pytest.mark.parametrize("reply", [None, SimpleNamespace(), {}, {"data": {}}, {"data": ""}, {"data": None}])
+def test_fubon_malformed_container_marks_failed_not_empty(reply):
+    src, _, _ = fubon_setup([reply])
+    store = HistStore(FakeClient())
+    fubon_source.ingest_kbars(src, store, products=["TXF"], since=FRI, until=FRI, force=False)
+    assert store.client.marks[("fubon", "TXF", "kbars", FRI)] == "FAILED"
+
+
+def ingest_snapshot(kind, src, store, *, force=False, since=FRI):
+    if kind == "ticks":
+        return run_ticks(src, store, since=since, force=force)
+    return shioaji_source.ingest_kbars(
+        src, store, products=["TXF"], since=since, until=FRI, min_remaining_bytes=50 * MB, force=force
+    )
+
+
+def shorten_reply(src, kind, count):
+    original = getattr(src.api, kind)
+
+    def reply(**kwargs):
+        raw = vars(original(**kwargs))
+        return {key: values[:count] for key, values in raw.items()}
+
+    setattr(src.api, kind, reply)
+
+
+@pytest.mark.parametrize("kind", ["ticks", "kbars"])
+@pytest.mark.parametrize("count", [0, 1])
+def test_snapshot_force_refetch_removes_absent_keys_and_preserves_other_slices(kind, count):
+    src, store, client = setup()
+    if kind == "kbars":
+        src.api.kbars = lambda **kwargs: SimpleNamespace(
+            ts=[local_ns(FRI, "09:00") + i * 60 * NS for i in range(3)],
+            Open=[1] * 3,
+            High=[1] * 3,
+            Low=[1] * 3,
+            Close=[1] * 3,
+            Volume=[1] * 3,
+        )
+    ingest_snapshot(kind, src, store, since=THU)
+    table = "hft.hist_" + kind
+    old = client.final(table)
+    target = old[-1]
+    other = [target._replace(source="other"), target._replace(product="MXF")]
+    if kind == "kbars":
+        other.append(target._replace(timeframe_min=5))
+    store.insert(other)
+    shorten_reply(src, kind, count)
+    ingest_snapshot(kind, src, store, force=True)
+    current = client.final(table)
+    friday = [
+        row
+        for row in current
+        if row.source == "shioaji"
+        and row.product == "TXF"
+        and (row.trading_day == FRI if kind == "ticks" else row.timeframe_min == 1)
+    ]
+    assert len(friday) == count
+    assert all(row in current for row in other)
+    if kind == "ticks":
+        assert all(row in current for row in old if row.trading_day == THU)
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == ("DONE" if count else "EMPTY")
+    assert client.commands
+    assert all(settings == {"mutations_sync": 1} for _, _, settings in client.commands)
+
+
+@pytest.mark.parametrize("kind", ["ticks", "kbars"])
+@pytest.mark.parametrize("failure", ["delete", "insert"])
+def test_snapshot_write_failure_invalidates_success_and_retry_clears_partial_rows(kind, failure):
+    src, store, client = setup()
+    if kind == "kbars":
+        src.api.kbars = lambda **kwargs: SimpleNamespace(
+            ts=[local_ns(FRI, "09:00") + i * 60 * NS for i in range(3)],
+            Open=[1] * 3,
+            High=[1] * 3,
+            Low=[1] * 3,
+            Close=[1] * 3,
+            Volume=[1] * 3,
+        )
+    ingest_snapshot(kind, src, store)
+    store.batch_rows = 1
+    client.fail_delete = failure == "delete"
+    client.fail_insert_at = client.data_inserts + 2 if failure == "insert" else None
+    stats = ingest_snapshot(kind, src, store, force=True)
+    assert stats["FAILED" if kind == "ticks" else "failed"] == 1
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == "FAILED"
+    if failure == "insert":
+        assert len(client.final("hft.hist_" + kind)) == 1
+    client.fail_delete, client.fail_insert_at = False, None
+    shorten_reply(src, kind, 0)
+    ingest_snapshot(kind, src, store)
+    assert client.final("hft.hist_" + kind) == []
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == "EMPTY"
+    for index, event in enumerate(client.events):
+        if event[0] == "delete":
+            assert client.events[index - 1] == ("insert", "hft.hist_ingest_watermark")
+
+
+@pytest.mark.parametrize("day", [MON, FRI])
+def test_kbar_snapshot_replaces_night_boundaries_and_preserves_partial_lookback(day):
+    previous = day - dt.timedelta(days=1)
+    while previous.weekday() >= 5:
+        previous -= dt.timedelta(days=1)
+    inside = [candle(previous, "15:00"), candle(day, "00:00"), candle(day, "14:59")]
+    if day == MON:
+        inside.append(candle(previous + dt.timedelta(days=1), "01:00"))
+    outside = [candle(previous, "14:59"), candle(day, "15:00")]
+    _, old_rows = fubon_source.convert_candles({"data": outside + inside}, product="TXF", ingest_ts=1)
+    # The API includes partial previous-day lookback; it must not overwrite that complete day's rows.
+    _, fetched = fubon_source.convert_candles(
+        {"data": [candle(previous, "14:59", close="999"), candle(day, "09:00")]},
+        product="TXF",
+        ingest_ts=2,
+    )
+    client = FakeClient()
+    store = HistStore(client)
+    store.insert(old_rows)
+    stats = run_kbar_windows(
+        store,
+        source="fubon",
+        product="TXF",
+        since=day,
+        until=day,
+        chunk_days=27,
+        force=True,
+        fetch=lambda start, end: WindowResult(fetched),
+    )
+    assert stats["rows"] == 1
+    assert set(client.final("hft.hist_kbars")) == {*old_rows[:2], fetched[1]}
+    assert client.marks[("fubon", "TXF", "kbars", day)] == "DONE"
+    sql, params, _ = client.commands[0]
+    assert "bar_ts >= {start:Int64} AND bar_ts < {end:Int64}" in sql
+    assert params["start"] == old_rows[2].bar_ts
+    assert params["end"] == old_rows[1].bar_ts
+
+
+@pytest.mark.parametrize("kind", ["ticks", "kbars"])
+def test_snapshot_quota_response_keeps_previous_rows_without_deleting(kind):
+    src, store, client = setup()
+    ingest_snapshot(kind, src, store)
+    old = client.final("hft.hist_" + kind)
+    before = len(client.commands)
+    src.api.remaining = [MB]
+    ingest_snapshot(kind, src, store, force=True)
+    assert client.final("hft.hist_" + kind) == old
+    assert len(client.commands) == before
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == "PENDING_QUOTA"
+
+
+def test_fubon_valid_empty_list_clears_previous_rows_and_marks_empty():
+    client = FakeClient()
+    store = HistStore(client)
+    src, _, _ = fubon_setup([{"data": [candle(FRI, "09:00")]}])
+    fubon_source.ingest_kbars(src, store, products=["TXF"], since=FRI, until=FRI, force=False)
+    assert client.final("hft.hist_kbars")
+    empty, _, _ = fubon_setup([{"data": []}])
+    fubon_source.ingest_kbars(empty, store, products=["TXF"], since=FRI, until=FRI, force=True)
+    assert client.final("hft.hist_kbars") == []
+    assert client.marks[("fubon", "TXF", "kbars", FRI)] == "EMPTY"
