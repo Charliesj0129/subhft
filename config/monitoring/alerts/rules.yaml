@@ -1533,9 +1533,11 @@ groups:
   #
   - alert: StrategyNotProcessingEvents
     expr: |
-      ((sum by (job, instance, strategy_id) (increase(strategy_events_received_total[15m])) == 0)
-      and on(job, instance) market_trading_hours_active == 1)
-      unless on(job, instance) (order_path_enabled == 0)
+      sum by (strategy_id) (
+        (sum by (job, instance, strategy_id) (increase(strategy_events_received_total[15m]))
+        and on(job, instance) market_trading_hours_active == 1)
+        unless on(job, instance) (order_path_enabled == 0)
+      ) == 0
     for: 10m
     labels:
       severity: warning

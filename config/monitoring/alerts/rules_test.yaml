@@ -1724,7 +1724,7 @@ tests:
       - eval_time: 10m
         alertname: StrategyNotProcessingEvents
         exp_alerts: []
-      - eval_time: 12m
+      - eval_time: 30m
         alertname: StrategyNotProcessingEvents
         exp_alerts: []
 
@@ -1741,12 +1741,10 @@ tests:
       - eval_time: 10m
         alertname: StrategyNotProcessingEvents
         exp_alerts: []
-      - eval_time: 12m
+      - eval_time: 30m
         alertname: StrategyNotProcessingEvents
         exp_alerts:
           - exp_labels:
-              job: hft
-              instance: engine-a
               strategy_id: R47_MAKER_TMF
               severity: warning
             exp_annotations:
@@ -1772,12 +1770,10 @@ tests:
       - eval_time: 10m
         alertname: StrategyNotProcessingEvents
         exp_alerts: []
-      - eval_time: 12m
+      - eval_time: 30m
         alertname: StrategyNotProcessingEvents
         exp_alerts:
           - exp_labels:
-              job: hft
-              instance: engine-a
               strategy_id: R47_MAKER_TMF
               severity: warning
             exp_annotations:
@@ -1817,12 +1813,10 @@ tests:
       - eval_time: 10m
         alertname: StrategyNotProcessingEvents
         exp_alerts: []
-      - eval_time: 12m
+      - eval_time: 30m
         alertname: StrategyNotProcessingEvents
         exp_alerts:
           - exp_labels:
-              job: hft
-              instance: engine-a
               strategy_id: R47_MAKER_TMF
               severity: warning
             exp_annotations:

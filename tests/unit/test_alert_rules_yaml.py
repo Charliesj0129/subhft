@@ -40,10 +40,15 @@ def test_order_path_alerts_suppress_only_explicit_disabled_target(alert_name):
     assert "absent(order_path_enabled)" not in expr
 
 
-def test_strategy_processing_alert_preserves_scrape_target_labels():
+def test_strategy_processing_alert_preserves_strategy_only_output_labels():
     expr = _load_alerts_by_name()["StrategyNotProcessingEvents"]["expr"]
-    assert "sum by (job, instance, strategy_id)" in expr
-    assert "and on(job, instance) market_trading_hours_active == 1" in expr
+    assert " ".join(expr.split()) == (
+        "sum by (strategy_id) ( "
+        "(sum by (job, instance, strategy_id) (increase(strategy_events_received_total[15m])) "
+        "and on(job, instance) market_trading_hours_active == 1) "
+        "unless on(job, instance) (order_path_enabled == 0) "
+        ") == 0"
+    )
 
 
 def test_gateway_task_alert_preserves_stormguard_halt_guard():
