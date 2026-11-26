@@ -104,18 +104,22 @@ def main(argv: Sequence[str] | None = None, *, now: dt.datetime | None = None) -
         return 2
     store = HistStore.from_env(dry_run=args.dry_run)
     try:
-        fubon = args.command == "kbars" and args.source == "fubon"
-        src = fubon_source.FubonSource.connect() if fubon else shioaji_source.ShioajiSource.connect()
-    except SourceError as exc:
-        log.error("connect_failed", error=str(exc))
-        return 1
-    try:
-        stats = _ingest(args, src, store)
+        source = "fubon" if args.command == "kbars" and args.source == "fubon" else "shioaji"
+        with store.writer_locks(source, args.products, args.command):
+            try:
+                src = (
+                    fubon_source.FubonSource.connect() if source == "fubon" else shioaji_source.ShioajiSource.connect()
+                )
+            except SourceError as exc:
+                log.error("connect_failed", error=str(exc))
+                return 1
+            try:
+                stats = _ingest(args, src, store)
+            finally:
+                src.close()
     except SourceError as exc:
         log.error("ingest_aborted", error=str(exc))
         return 1
-    finally:
-        src.close()
     log.info("ingest_done", command=args.command, dry_run=args.dry_run, **stats)
     return int(any(stats.get(key, 0) for key in ("FAILED", "failed", "failed_products")))
 

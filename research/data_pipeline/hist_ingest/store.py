@@ -2,19 +2,28 @@
 
 Connection env, as in research/data_pipeline: HFT_CLICKHOUSE_HOST, HFT_CLICKHOUSE_PORT (HTTP, default 8123),
 HFT_CLICKHOUSE_USER, HFT_CLICKHOUSE_PASSWORD. Each refetch replaces complete trading-day snapshots: mark FAILED,
-wait for the old slice's deletion, insert the new rows, then mark DONE/EMPTY. A crash leaves the slice retryable.
-This requires a single writer per source/product/kind. Replacement is not atomic for readers: they can see an empty
-or partial slice until its final watermark is written; a successful watermark does not isolate concurrent reads.
+insert every new batch, synchronously delete older versions, then mark DONE/EMPTY. Insert failure retains all old
+keys, although successful new same-key values can supersede old versions. Readers can see mixed old/new versions;
+replacement is not atomic and a successful watermark does not isolate concurrent reads. File locks arbitrate writers
+on this host only; writers on different hosts require external coordination.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
+import functools
+import hashlib
+import json
 import os
+import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import ExitStack, contextmanager
+from pathlib import Path
 from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -56,6 +65,39 @@ def clickhouse_endpoint() -> tuple[str, int]:
     return os.getenv("HFT_CLICKHOUSE_HOST", "localhost"), int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
 
 
+def default_lock_directory() -> Path:
+    """Use the canonical repository log directory, shared by its linked worktrees."""
+    root = Path(__file__).resolve().parents[3]
+    git_dir = root / ".git"
+    if git_dir.is_file():
+        label, sep, target = git_dir.read_text().strip().partition(":")
+        if label != "gitdir" or not sep:
+            raise SourceError("cannot resolve historical ingestion lock directory")
+        git_dir = (root / target.strip()).resolve()
+    common = git_dir / "commondir"
+    if common.is_file():
+        git_dir = (git_dir / common.read_text().strip()).resolve()
+    return git_dir.parent / "log" / "hist_ingest" / "locks"
+
+
+class WriterBusyError(SourceError):
+    """Another writer owns this destination/source/product/kind on this host."""
+
+
+def locked_ingestion(source: str, kind: str) -> Callable[..., Any]:
+    """Acquire all products before any library ingestion reads or broker calls."""
+
+    def decorate(fn: Callable[..., Counter[str]]) -> Callable[..., Counter[str]]:
+        @functools.wraps(fn)
+        def wrapped(src: Any, store: HistStore, *, products: Sequence[str], **kwargs: Any) -> Counter[str]:
+            with store.writer_locks(source, products, kind):
+                return fn(src, store, products=products, **kwargs)
+
+        return wrapped
+
+    return decorate
+
+
 class HistStore:
     """Thin writer over a ``clickhouse_connect`` client. ``dry_run`` skips every write; reads still happen."""
 
@@ -68,6 +110,79 @@ class HistStore:
         clock_ns: Callable[[], int] = time.time_ns,
     ) -> None:
         self.client, self.dry_run, self.batch_rows, self.clock_ns = client, dry_run, batch_rows, clock_ns
+        self._held: dict[str, tuple[int, int, int, int]] = {}
+        self._lock_guard = threading.RLock()
+
+    def _lock_key(self, source: str, product: str, kind: str) -> str:
+        # Qualified TABLES identify the actual destination, not client.database.
+        host, port = clickhouse_endpoint()
+        url = getattr(self.client, "url", None)
+        if isinstance(url, str):
+            parsed = urlsplit(url)
+            host, port = parsed.hostname or host, parsed.port or port
+        else:
+            host = getattr(self.client, "host", host)
+            port = getattr(self.client, "port", port)
+        if host in {"127.0.0.1", "::1"}:
+            host = "localhost"
+        host, port = str(host).lower(), int(port)
+        database = TABLES[TickRow if kind == "ticks" else KbarRow][0].split(".")[0]
+        return hashlib.sha256(json.dumps([host, port, database, source, product, kind]).encode()).hexdigest()
+
+    @contextmanager
+    def writer_lock(self, source: str, product: str, kind: str) -> Iterator[None]:
+        """Nonblocking same-host exclusion; only this store and owning thread may reenter.
+
+        Independent stores use separate descriptors and cannot bypass flock in one process.
+        The default canonical repo log/hist_ingest/locks persists across worktrees and reboots.
+        HFT_HIST_INGEST_LOCK_DIR overrides it and must be shared by all writers on the host.
+        Lock files are retained: unlinking a locked inode would let another writer bypass exclusion.
+        """
+        if self.dry_run:
+            yield
+            return
+        key = self._lock_key(source, product, kind)
+        owner = (os.getpid(), threading.get_ident())
+        with self._lock_guard:
+            held = self._held.get(key)
+            if held and held[:2] == owner:
+                self._held[key] = (*owner, held[2], held[3] + 1)
+            else:
+                override = os.environ.get("HFT_HIST_INGEST_LOCK_DIR")
+                directory = Path(override) if override else default_lock_directory()
+                directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                fd = os.open(directory / (key + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    os.close(fd)
+                    log.error("hist_ingest_writer_busy", source=source, product=product, kind=kind)
+                    raise WriterBusyError("historical ingestion writer lock busy") from exc
+                except BaseException:
+                    os.close(fd)
+                    raise
+                self._held[key] = (*owner, fd, 1)
+        try:
+            yield
+        finally:
+            with self._lock_guard:
+                held = self._held[key]
+                if held[3] > 1:
+                    self._held[key] = (*owner, held[2], held[3] - 1)
+                else:
+                    del self._held[key]
+                    try:
+                        fcntl.flock(held[2], fcntl.LOCK_UN)
+                    finally:
+                        os.close(held[2])
+
+    @contextmanager
+    def writer_locks(self, source: str, products: Sequence[str], kind: str) -> Iterator[None]:
+        """Acquire the entire product set before reads/writes; release all on any refusal."""
+        with ExitStack() as stack:
+            for product in sorted(set(products)):
+                stack.enter_context(self.writer_lock(source, product, kind))
+            yield
 
     @classmethod
     def from_env(cls, *, dry_run: bool = False) -> HistStore:
@@ -101,11 +216,37 @@ class HistStore:
         contract_code: str = "",
         usage_bytes_after: int = -1,
     ) -> int:
+        with self.writer_lock(source, product, kind):
+            return self._replace_days(
+                source,
+                product,
+                kind,
+                days,
+                rows,
+                contract_code=contract_code,
+                usage_bytes_after=usage_bytes_after,
+            )
+
+    def _replace_days(
+        self,
+        source: str,
+        product: str,
+        kind: str,
+        days: Sequence[dt.date],
+        rows: Sequence[Any],
+        *,
+        contract_code: str = "",
+        usage_bytes_after: int = -1,
+    ) -> int:
         """Replace a contiguous weekday window, including a valid empty reply.
 
         K-bar lookback rows outside this window are excluded: their trading days may only be partially fetched.
         ``mutations_sync=1`` waits for completion on this server (the existing tables are unreplicated).
         All slice values are bound parameters; table names come only from the fixed table map.
+        Before stale deletion, any insert failure keeps all old keys readable, including absent refetch keys.
+        Successful newer same-key rows may replace old values, so readers can see a mixed snapshot.
+        A delete failure leaves FAILED. A final-watermark failure may mark only some days complete;
+        all data inserts and stale deletion have already succeeded for those days.
         """
         if not days:
             return 0
@@ -135,10 +276,23 @@ class HistStore:
         try:
             # Invalidate even an old DONE/EMPTY before any destructive operation, including --force.
             self.mark_days(source, product, kind, days, FAILED, note="snapshot replacement in progress")
+            where = "source = {source:String} AND product = {product:String} AND " + predicate
             if not self.dry_run:
-                sql = f"ALTER TABLE {table} DELETE WHERE source = {{source:String}} AND product = {{product:String}} "
-                self.client.command(sql + "AND " + predicate, parameters=params, settings={"mutations_sync": 1})
+                existing = self.client.query(
+                    f"SELECT max(ingest_ts) FROM {table} WHERE " + where, parameters=params
+                ).result_rows[0][0]
+                threshold = max(self.clock_ns(), int(existing or 0) + 1)
+            else:
+                threshold = self.clock_ns()
+            selected = [r._replace(ingest_ts=threshold) for r in selected]
             count = self.insert(selected)
+            if not self.dry_run:
+                params["threshold"] = threshold
+                self.client.command(
+                    f"ALTER TABLE {table} DELETE WHERE " + where + " AND ingest_ts < {threshold:Int64}",
+                    parameters=params,
+                    settings={"mutations_sync": 1},
+                )
             self.mark_days(
                 source,
                 product,
@@ -231,9 +385,33 @@ def run_kbar_windows(
     force: bool,
     fetch: Callable[[dt.date, dt.date], WindowResult],
 ) -> Counter[str]:
+    with store.writer_lock(source, product, "kbars"):
+        return _run_kbar_windows(
+            store,
+            source=source,
+            product=product,
+            since=since,
+            until=until,
+            chunk_days=chunk_days,
+            force=force,
+            fetch=fetch,
+        )
+
+
+def _run_kbar_windows(
+    store: HistStore,
+    *,
+    source: str,
+    product: str,
+    since: dt.date,
+    until: dt.date,
+    chunk_days: int,
+    force: bool,
+    fetch: Callable[[dt.date, dt.date], WindowResult],
+) -> Counter[str]:
     """Windows of at most ``chunk_days`` calendar days from the oldest pending weekday up to ``until``.
 
-    Every weekday of a window gets a watermark counted by TAIFEX trading day (trading_day_of; 0 is EMPTY). The fetch
+    Only originally pending weekdays get watermarks counted by TAIFEX trading day (0 is EMPTY). The fetch
     starts NIGHT_LOOKBACK_DAYS earlier so the previous evening's night session (Friday night for a Monday) is included.
     A window that raises SourceError is marked FAILED, and three failures stop the loop.
     Only trading days in the window are replaced; partial lookback days are never inserted.
@@ -243,18 +421,26 @@ def run_kbar_windows(
     while pending and totals["failed"] < 3:
         start = pending[0]
         end = min(start + dt.timedelta(days=chunk_days - 1), until)
-        days, pending = weekdays(start, end), [d for d in pending if d > end]
+        days, pending = [d for d in pending if d <= end], [d for d in pending if d > end]
+        runs: list[list[dt.date]] = []
+        for day in days:
+            if not runs or weekdays(runs[-1][-1], day) != [runs[-1][-1], day]:
+                runs.append([])
+            runs[-1].append(day)
         try:
             result = fetch(start - dt.timedelta(days=NIGHT_LOOKBACK_DAYS), end)
             if result.status is None:
-                count = store.replace_days(
-                    source,
-                    product,
-                    "kbars",
-                    days,
-                    result.rows,
-                    contract_code=result.contract_code,
-                    usage_bytes_after=result.usage_bytes_after,
+                count = sum(
+                    store.replace_days(
+                        source,
+                        product,
+                        "kbars",
+                        run,
+                        result.rows,
+                        contract_code=result.contract_code,
+                        usage_bytes_after=result.usage_bytes_after,
+                    )
+                    for run in runs
                 )
             else:
                 # Quota/stopped responses are not complete snapshots and must retain existing rows.
@@ -269,6 +455,8 @@ def run_kbar_windows(
                     usage_bytes_after=result.usage_bytes_after,
                     note=result.note,
                 )
+        except WriterBusyError:
+            raise
         except SourceError as exc:
             log.error(
                 "kbars_window_failed", source=source, product=product, start=str(start), end=str(end), error=str(exc)

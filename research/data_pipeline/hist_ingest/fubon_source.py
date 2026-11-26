@@ -2,7 +2,8 @@
 
 Credentials come from the environment and mirror feed_adapter/fubon/session_runtime.py:
 sdk.apikey_login(HFT_FUBON_PERSONAL_ID, HFT_FUBON_API_KEY, HFT_FUBON_CERT_PATH[, HFT_FUBON_CERT_PASSWORD]),
-then sdk.init_realtime(). A relative cert path is resolved against the --env-file directory. The SDK is imported lazily, so this module loads without fubon_neo.
+then sdk.init_realtime(). A relative cert path is resolved against the --env-file directory.
+The SDK is imported lazily, so this module loads without fubon_neo.
 
 Both sessions ("regular", "afterhours") are fetched per window of at most 180 calendar days. The response
 shape (a ``data`` list of dicts with date/open/high/low/close/volume, an optional delivery-month ``symbol``) is
@@ -24,7 +25,7 @@ import structlog
 
 from .model import KbarRow, SourceError, classify_session, iso_to_utc_ns, scale_price
 from .ratelimit import RateLimiter
-from .store import HistStore, WindowResult, run_kbar_windows
+from .store import HistStore, WindowResult, locked_ingestion, run_kbar_windows
 
 log = structlog.get_logger("hist_ingest.fubon")
 
@@ -137,6 +138,7 @@ def convert_candles(resp: Any, *, product: str, ingest_ts: int) -> tuple[str, li
     return code, rows
 
 
+@locked_ingestion(SOURCE, "kbars")
 def ingest_kbars(
     src: FubonSource, store: HistStore, *, products: Sequence[str], since: dt.date, until: dt.date, force: bool
 ) -> Counter[str]:

@@ -24,11 +24,11 @@ import structlog
 from .model import (
     FAILED,
     PENDING_QUOTA,
+    SHIOAJI_KBAR_NS,
+    TAIPEI,
     KbarRow,
     SourceError,
     TickRow,
-    SHIOAJI_KBAR_NS,
-    TAIPEI,
     classify_session,
     front_month_code,
     local_ns_to_utc_ns,
@@ -36,7 +36,7 @@ from .model import (
     weekdays,
 )
 from .ratelimit import RateLimiter
-from .store import HistStore, WindowResult, run_kbar_windows
+from .store import HistStore, WindowResult, WriterBusyError, locked_ingestion, run_kbar_windows
 
 log = structlog.get_logger("hist_ingest.shioaji")
 
@@ -161,6 +161,7 @@ def convert_kbars(raw: Any, product: str, query_code: str, contract_code: str, i
     return rows
 
 
+@locked_ingestion(SOURCE, "ticks")
 def ingest_ticks(
     src: ShioajiSource,
     store: HistStore,
@@ -202,6 +203,8 @@ def ingest_ticks(
                 mark(PENDING_QUOTA, usage_bytes_after=remaining, note=str(exc))
                 stats[PENDING_QUOTA] += 1
                 return stats
+            except WriterBusyError:
+                raise
             except SourceError as exc:
                 mark(FAILED, note=str(exc)[:200])
                 stats[FAILED] += 1
@@ -217,6 +220,8 @@ def ingest_ticks(
                 stats["rows"] += store.replace_days(
                     SOURCE, product, "ticks", [day], rows, contract_code=code, usage_bytes_after=after
                 )
+            except WriterBusyError:
+                raise
             except SourceError as exc:
                 mark(FAILED, note=str(exc)[:200])
                 stats[FAILED] += 1
@@ -252,6 +257,7 @@ def _kbar_fetcher(
     return fetch
 
 
+@locked_ingestion(SOURCE, "kbars")
 def ingest_kbars(
     src: ShioajiSource,
     store: HistStore,

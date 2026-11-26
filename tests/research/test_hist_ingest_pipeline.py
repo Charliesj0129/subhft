@@ -10,13 +10,19 @@ import pytest
 
 from research.data_pipeline.hist_ingest import __main__ as cli
 from research.data_pipeline.hist_ingest import fubon_source, shioaji_source
+from research.data_pipeline.hist_ingest import store as store_module
 from research.data_pipeline.hist_ingest.model import TAIPEI, SourceError
 from research.data_pipeline.hist_ingest.ratelimit import RateLimiter
-from research.data_pipeline.hist_ingest.store import HistStore, WindowResult, run_kbar_windows
+from research.data_pipeline.hist_ingest.store import HistStore, WindowResult, WriterBusyError, run_kbar_windows
 
 NS = 1_000_000_000
 MB = 1024 * 1024
 FRI, THU, WED, TUE, MON = (dt.date(2026, 11, d) for d in (20, 19, 18, 17, 16))
+
+
+@pytest.fixture(autouse=True)
+def isolate_writer_locks(tmp_path, monkeypatch):
+    monkeypatch.setenv("HFT_HIST_INGEST_LOCK_DIR", str(tmp_path / "locks"))
 
 
 def local_ns(day: dt.date, hhmm: str) -> int:
@@ -33,6 +39,7 @@ class FakeClient:
         self.fail_delete = False
         self.fail_insert_at = None
         self.data_inserts = 0
+        self.queries = []
 
     def insert(self, table, data, column_names=None):
         self.events.append(("insert", table))
@@ -56,6 +63,8 @@ class FakeClient:
         p = parameters
 
         def deleted(row):
+            if row.ingest_ts >= p.get("threshold", float("inf")):
+                return False
             if (row.source, row.product) != (p["source"], p["product"]):
                 return False
             if table == "hft.hist_ticks":
@@ -80,7 +89,21 @@ class FakeClient:
         return list(latest.values())
 
     def query(self, sql, parameters=None):
+        self.queries.append((sql, parameters))
         p = parameters
+        if sql.startswith("SELECT max(ingest_ts)"):
+            table = sql.split(" FROM ")[1].split()[0]
+            values = [
+                r.ingest_ts
+                for r in self.tables.get(table, [])
+                if (r.source, r.product) == (p["source"], p["product"])
+                and (
+                    p["start"] <= r.trading_day <= p["end"]
+                    if table == "hft.hist_ticks"
+                    else r.timeframe_min == p["timeframe"] and p["start"] <= r.bar_ts < p["end"]
+                )
+            ]
+            return SimpleNamespace(result_rows=[(max(values, default=0),)])
         keep = [(k[3], v) for k, v in self.marks.items() if k[:3] == (p["source"], p["product"], p["kind"])]
         return SimpleNamespace(result_rows=keep)
 
@@ -506,7 +529,7 @@ def test_pending_quota_day_retries_after_usage_replenishes():
 
 def test_cli_converts_scheduled_500_mib_floor_to_bytes(monkeypatch):
     floors = []
-    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: object())
+    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: HistStore(FakeClient()))
     monkeypatch.setattr(cli.shioaji_source.ShioajiSource, "connect", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(cli, "_ingest", lambda args, src, store: floors.append(args.floor) or {})
     now = dt.datetime(2026, 11, 25, 14, 20, 6, tzinfo=TAIPEI)
@@ -517,7 +540,7 @@ def test_cli_converts_scheduled_500_mib_floor_to_bytes(monkeypatch):
 @pytest.mark.parametrize("stats", [{"FAILED": 1}, {"failed": 1}, {"failed_products": 1}])
 def test_cli_returns_nonzero_for_failed_ingest_stats(monkeypatch, stats):
     closed = []
-    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: object())
+    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: HistStore(FakeClient()))
     monkeypatch.setattr(
         cli.shioaji_source.ShioajiSource, "connect", lambda: SimpleNamespace(close=lambda: closed.append(True))
     )
@@ -643,7 +666,7 @@ def test_snapshot_write_failure_invalidates_success_and_retry_clears_partial_row
     assert stats["FAILED" if kind == "ticks" else "failed"] == 1
     assert client.marks[("shioaji", "TXF", kind, FRI)] == "FAILED"
     if failure == "insert":
-        assert len(client.final("hft.hist_" + kind)) == 1
+        assert len(client.final("hft.hist_" + kind)) == 3
     client.fail_delete, client.fail_insert_at = False, None
     shorten_reply(src, kind, 0)
     ingest_snapshot(kind, src, store)
@@ -651,7 +674,8 @@ def test_snapshot_write_failure_invalidates_success_and_retry_clears_partial_row
     assert client.marks[("shioaji", "TXF", kind, FRI)] == "EMPTY"
     for index, event in enumerate(client.events):
         if event[0] == "delete":
-            assert client.events[index - 1] == ("insert", "hft.hist_ingest_watermark")
+            assert client.events[index - 1][0] == "insert"
+            assert client.events[index + 1] == ("insert", "hft.hist_ingest_watermark")
 
 
 @pytest.mark.parametrize("day", [MON, FRI])
@@ -684,7 +708,10 @@ def test_kbar_snapshot_replaces_night_boundaries_and_preserves_partial_lookback(
         fetch=lambda start, end: WindowResult(fetched),
     )
     assert stats["rows"] == 1
-    assert set(client.final("hft.hist_kbars")) == {*old_rows[:2], fetched[1]}
+    assert set(client.final("hft.hist_kbars")) == {
+        *old_rows[:2],
+        fetched[1]._replace(ingest_ts=client.final("hft.hist_kbars")[-1].ingest_ts),
+    }
     assert client.marks[("fubon", "TXF", "kbars", day)] == "DONE"
     sql, params, _ = client.commands[0]
     assert "bar_ts >= {start:Int64} AND bar_ts < {end:Int64}" in sql
@@ -715,3 +742,189 @@ def test_fubon_valid_empty_list_clears_previous_rows_and_marks_empty():
     fubon_source.ingest_kbars(empty, store, products=["TXF"], since=FRI, until=FRI, force=True)
     assert client.final("hft.hist_kbars") == []
     assert client.marks[("fubon", "TXF", "kbars", FRI)] == "EMPTY"
+
+
+@pytest.mark.parametrize("failure_batch", [1, 2])
+@pytest.mark.parametrize("kind", ["ticks", "kbars"])
+def test_snapshot_insert_failure_preserves_old_keys_and_failed_watermark(kind, failure_batch):
+    src, store, client = setup()
+    if kind == "kbars":
+        src.api.kbars = lambda **kwargs: SimpleNamespace(
+            ts=[local_ns(FRI, "09:00") + i * 60 * NS for i in range(3)],
+            Open=[1] * 3,
+            High=[1] * 3,
+            Low=[1] * 3,
+            Close=[1] * 3,
+            Volume=[1] * 3,
+        )
+    ingest_snapshot(kind, src, store)
+    table = "hft.hist_" + kind
+    old = client.final(table)
+    store.batch_rows = 1
+    client.fail_insert_at = client.data_inserts + failure_batch
+    before = len(client.commands)
+    shorten_reply(src, kind, 2)
+    ingest_snapshot(kind, src, store, force=True)
+    key = (lambda r: (r.exch_ts, r.seq)) if kind == "ticks" else (lambda r: r.bar_ts)
+    assert {key(r) for r in old} <= {key(r) for r in client.final(table)}
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == "FAILED"
+    assert len(client.commands) == before
+
+
+def test_snapshot_stale_delete_follows_every_batch_and_uses_fresh_common_version():
+    src, store, client = setup()
+    ingest_snapshot("ticks", src, store)
+    old_max = max(r.ingest_ts for r in client.final("hft.hist_ticks"))
+    store.clock_ns = lambda: 1
+    store.batch_rows = 1
+    client.events.clear()
+    ingest_snapshot("ticks", src, store, force=True)
+    assert [e[0] for e in client.events] == ["insert"] * 4 + ["delete", "insert"]
+    fresh = client.final("hft.hist_ticks")
+    assert {r.ingest_ts for r in fresh} == {old_max + 1}
+    assert client.commands[-1][1]["threshold"] == old_max + 1
+
+
+@pytest.mark.parametrize("include_done", [False, True])
+def test_kbar_pending_runs_preserve_interleaved_done_rows_and_watermarks(include_done):
+    client = FakeClient()
+    store = HistStore(client)
+    _, original = fubon_source.convert_candles(
+        {"data": [candle(TUE, "09:00"), candle(THU, "09:00")]}, product="TXF", ingest_ts=99
+    )
+    store.insert(original)
+    store.mark_days("fubon", "TXF", "kbars", [TUE], "DONE")
+    store.mark_days("fubon", "TXF", "kbars", [THU], "EMPTY")
+    old_marks = client.inserted("hft.hist_ingest_watermark")[:]
+    _, fetched = fubon_source.convert_candles(
+        {
+            "data": [candle(MON, "09:00"), candle(WED, "09:00"), candle(FRI, "09:00")]
+            + ([candle(TUE, "09:00", close="999")] if include_done else [])
+        },
+        product="TXF",
+        ingest_ts=1,
+    )
+    calls = []
+    stats = run_kbar_windows(
+        store,
+        source="fubon",
+        product="TXF",
+        since=MON,
+        until=FRI,
+        chunk_days=27,
+        force=False,
+        fetch=lambda start, end: calls.append((start, end)) or WindowResult(fetched),
+    )
+    assert stats["rows"] == 3
+    assert len(calls) == 1
+    assert set(original) <= set(client.final("hft.hist_kbars"))
+    assert [r for r in client.inserted("hft.hist_ingest_watermark") if r.trading_day in (TUE, THU)] == old_marks
+
+
+def test_ticks_pending_days_preserve_done_data_and_watermark():
+    src, store, client = setup()
+    run_ticks(src, store, since=WED, until=WED)
+    before = client.final("hft.hist_ticks")[:]
+    marks = client.inserted("hft.hist_ingest_watermark")[:]
+    run_ticks(src, store, since=TUE, until=THU)
+    assert set(before) <= set(client.final("hft.hist_ticks"))
+    assert [r for r in client.inserted("hft.hist_ingest_watermark") if r.trading_day == WED] == marks
+    assert src.api.requested_days == [WED, THU, TUE]
+
+
+def test_cli_busy_lock_returns_nonzero_before_connect_or_writes(monkeypatch):
+    holder, contender = HistStore(FakeClient()), HistStore(FakeClient())
+    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: contender)
+    monkeypatch.setattr(cli.shioaji_source.ShioajiSource, "connect", lambda: pytest.fail("broker connected"))
+    with holder.writer_lock("shioaji", "TXF", "ticks"):
+        code = cli.main(
+            ["ticks", "--products", "TXF", "--env-file", "/nonexistent"],
+            now=dt.datetime(2026, 11, 20, 15, 30, tzinfo=TAIPEI),
+        )
+    assert code == 1
+    assert contender.client.calls == []
+    assert contender.client.commands == []
+    assert contender.client.queries == []
+
+
+@pytest.mark.parametrize("kind", ["ticks", "kbars"])
+def test_cli_nested_ingest_replace_reenters_and_releases_outermost_lock(monkeypatch, kind):
+    src, store, client = setup()
+    src.close = lambda: None
+    monkeypatch.setattr(cli.HistStore, "from_env", lambda dry_run=False: store)
+    monkeypatch.setattr(cli.shioaji_source.ShioajiSource, "connect", lambda: src)
+    real_flock, operations = store_module.fcntl.flock, []
+
+    def flock(fd, operation):
+        operations.append(operation)
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(store_module.fcntl, "flock", flock)
+    assert (
+        cli.main(
+            [kind, "--products", "TXF", "--since", str(FRI), "--env-file", "/nonexistent"]
+            + (["--source", "shioaji"] if kind == "kbars" else []),
+            now=dt.datetime(2026, 11, 20, 15, 30, tzinfo=TAIPEI),
+        )
+        == 0
+    )
+    assert operations == [store_module.fcntl.LOCK_EX | store_module.fcntl.LOCK_NB, store_module.fcntl.LOCK_UN]
+    assert store._held == {}
+    assert client.marks[("shioaji", "TXF", kind, FRI)] == "DONE"
+    with HistStore(client).writer_lock("shioaji", "TXF", kind):
+        assert len(operations) == 3
+
+
+def test_writer_lock_excludes_other_thread_store_and_process_then_releases():
+    import concurrent.futures
+    import subprocess
+    import sys
+
+    store = HistStore(FakeClient())
+
+    def contender():
+        with pytest.raises(WriterBusyError):
+            with store.writer_lock("shioaji", "TXF", "ticks"):
+                pytest.fail("other thread acquired lock")
+        return True
+
+    with store.writer_lock("shioaji", "TXF", "ticks"):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            assert executor.submit(contender).result(timeout=5)
+        with pytest.raises(WriterBusyError):
+            with HistStore(FakeClient()).writer_lock("shioaji", "TXF", "ticks"):
+                pytest.fail("other store acquired lock")
+        script = """
+from types import SimpleNamespace
+from research.data_pipeline.hist_ingest.store import HistStore, WriterBusyError
+try:
+    with HistStore(SimpleNamespace()).writer_lock('shioaji', 'TXF', 'ticks'):
+        raise SystemExit(2)
+except WriterBusyError:
+    raise SystemExit(0)
+"""
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=10)
+        assert result.returncode == 0, result.stderr.decode()
+    with HistStore(FakeClient()).writer_lock("shioaji", "TXF", "ticks"):
+        assert store._held == {}
+
+
+def test_writer_lock_scope_uses_actual_endpoint_database_and_product(monkeypatch):
+    a = HistStore(SimpleNamespace(url="http://127.0.0.1:8123", database="ignored"))
+    b = HistStore(SimpleNamespace(host="localhost", port="8123"))
+    key = a._lock_key("shioaji", "TXF", "ticks")
+    assert key == b._lock_key("shioaji", "TXF", "ticks")
+    assert key != b._lock_key("shioaji", "MXF", "ticks")
+    assert key != b._lock_key("fubon", "TXF", "ticks")
+    assert key != b._lock_key("shioaji", "TXF", "kbars")
+    assert key != HistStore(SimpleNamespace(host="localhost", port=8124))._lock_key("shioaji", "TXF", "ticks")
+    monkeypatch.setitem(store_module.TABLES, store_module.TickRow, ("scratch.hist_ticks", ()))
+    assert key != b._lock_key("shioaji", "TXF", "ticks")
+
+
+def test_default_lock_directory_is_canonical_repository_log():
+    import subprocess
+    from pathlib import Path
+
+    common = subprocess.check_output(["git", "rev-parse", "--git-common-dir"], text=True).strip()
+    assert store_module.default_lock_directory() == Path(common).resolve().parent / "log" / "hist_ingest" / "locks"
