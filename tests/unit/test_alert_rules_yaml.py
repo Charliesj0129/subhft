@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "monitoring" / "alerts" / "rules.yaml"
@@ -27,6 +28,32 @@ def _load_alerts_by_name() -> dict[str, dict]:
             if name:
                 alerts[name] = rule
     return alerts
+
+
+@pytest.mark.parametrize(
+    "alert_name", ["ExecutionRouterTaskDown", "ExecutionGatewayTaskDown", "StrategyNotProcessingEvents"]
+)
+def test_order_path_alerts_suppress_only_explicit_disabled_target(alert_name):
+    expr = _load_alerts_by_name()[alert_name]["expr"]
+    assert "unless on(job, instance) (order_path_enabled == 0)" in expr
+    assert "and on(job, instance) order_path_enabled" not in expr
+    assert "absent(order_path_enabled)" not in expr
+
+
+def test_strategy_processing_alert_preserves_strategy_only_output_labels():
+    expr = _load_alerts_by_name()["StrategyNotProcessingEvents"]["expr"]
+    assert " ".join(expr.split()) == (
+        "sum by (strategy_id) ( "
+        "(sum by (job, instance, strategy_id) (increase(strategy_events_received_total[15m])) "
+        "and on(job, instance) market_trading_hours_active == 1) "
+        "unless on(job, instance) (order_path_enabled == 0) "
+        ") == 0"
+    )
+
+
+def test_gateway_task_alert_preserves_stormguard_halt_guard():
+    expr = _load_alerts_by_name()["ExecutionGatewayTaskDown"]["expr"]
+    assert "and on() stormguard_mode != 3" in expr
 
 
 def test_alpha_signal_silent_gates_on_nonzero_timestamp():

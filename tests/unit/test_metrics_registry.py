@@ -6,6 +6,20 @@ from prometheus_client import REGISTRY, Counter
 from hft_platform.observability.metrics import MetricsRegistry, _unregister_metric_prefixes
 
 
+def test_order_path_gauge_defaults_enabled_before_startup():
+    registry = MetricsRegistry()
+    assert registry.order_path_enabled._value.get() == 1
+    assert REGISTRY.get_sample_value(registry.order_path_enabled._name) == 1
+
+
+def test_order_path_gauge_reinitializes_enabled_after_disabled():
+    registry = MetricsRegistry()
+    registry.order_path_enabled.set(0)
+    replacement = MetricsRegistry()
+    assert replacement.order_path_enabled._value.get() == 1
+    assert REGISTRY.get_sample_value(replacement.order_path_enabled._name) == 1
+
+
 def test_unregister_metric_prefixes_removes():
     counter = Counter("test_prefix_metric_total", "doc")
     assert "test_prefix_metric_total" in REGISTRY._names_to_collectors  # type: ignore[attr-defined]

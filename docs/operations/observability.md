@@ -57,6 +57,8 @@
 - `autonomy_transitions_total{scope=...,from_mode=...,to_mode=...,reason=...}`
 
 ## 4) Execution / Order
+- `order_path_enabled`: registry 預設為 1；啟動時依已解析的 order mode 設定，只有 `disabled` 為 0，`sim` / `live` 為 1。
+  `ExecutionRouterTaskDown`、`ExecutionGatewayTaskDown`、`StrategyNotProcessingEvents` 僅在相同 `job` / `instance` 的此值為 0 時抑制；指標缺失仍保留告警。名稱遵循 `HFT_METRICS_PREFIX`，此處與現有告警規則使用預設空前綴。
 - `order_actions_total{type=...}`
 - `order_reject_total`
 - `shadow_orders_total{strategy=...,symbol=...,side=...}`
