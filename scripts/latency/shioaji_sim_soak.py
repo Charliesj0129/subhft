@@ -8,7 +8,7 @@ Closes the only residuals that static analysis and offline tests cannot:
     bulk probe lacks.
   * **Real-payload Decimal parity** — every live tick/bidask callback payload is
     piped through the production ``MarketDataNormalizer`` and asserted to land as
-    a positive scaled int, with the Rust-fallback rate recorded. This closes the
+    a positive scaled int, using the Python normalizer. This closes the
     synthetic gap left by the offline boundary test using REAL 1.5.3 objects.
   * **Reconnect timing** — ``set_event_callback`` is registered and event codes
     12 (Reconnecting) / 13 (Reconnected) plus the first post-reconnect tick are
@@ -194,8 +194,6 @@ class _ParityTracker:
                 "scaled_ok": self.scaled_ok,
                 "dropped": self.dropped,
                 "exceptions": self.exceptions,
-                "rust_fallback_tick": _counter(self._n._rust_fallback_tick),
-                "rust_fallback_bidask": _counter(self._n._rust_fallback_bidask),
                 "parity_holds": self.exceptions == 0 and self.dropped == 0 and events > 0,
                 "sample_schema": self.sample_schema,
             }
@@ -623,7 +621,6 @@ def main() -> int:
         print(f"  {label:<8} n={s.count:<4} P50={s.p50_us/1000:7.1f}ms P95={s.p95_us/1000:7.1f}ms P99={s.p99_us/1000:7.1f}ms")
     print(f"  decimal_parity: events={parity['events_total']} decimal={parity['decimal_priced']} "
           f"scaled_ok={parity['scaled_ok']} dropped={parity['dropped']} exc={parity['exceptions']} "
-          f"fallback(tick/bidask)={parity['rust_fallback_tick']}/{parity['rust_fallback_bidask']} "
           f"holds={parity['parity_holds']}")
     print(f"  reconnect: exercised={recon['exercised']} codes={recon['event_codes_seen']} recover_ms={recon['recover_ms']}")
     print(f"  resources: rss_slope={resources['rss_kb_per_s_slope']:.2f}kb/s threads_max={resources['threads_max']} "

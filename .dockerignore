@@ -2,6 +2,7 @@
 .github
 .agent
 .state
+.runtime/
 .env
 .env.*
 !.env.example
@@ -19,8 +20,6 @@ htmlcov/
 venv/
 
 target/
-rust/target/
-rust_core/target/
 
 research/
 data/
@@ -40,9 +39,9 @@ prometheus_data/
 
 *.pyc
 *.pyo
-*.pyd
-*.so
-*.dylib
+**/*.pyd
+**/*.so
+**/*.dylib
 
 dist/
 build/

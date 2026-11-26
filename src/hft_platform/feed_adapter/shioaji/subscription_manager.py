@@ -319,7 +319,7 @@ class SubscriptionManager:
             # _resubscribe_all is the only call site that takes it.
             import threading as _t
 
-            c._resubscribe_lock = _t.Lock()  # type: ignore[attr-defined]
+            c._resubscribe_lock = _t.Lock()
             lock = c._resubscribe_lock
         if not lock.acquire(blocking=False):
             metrics = getattr(c, "metrics", None)
@@ -449,8 +449,8 @@ class SubscriptionManager:
         def _order_cb(stat: Any, msg: Any) -> None:
             try:
                 # The 1.5.x core hands back Rust mapping types that no
-                # isinstance(x, dict) gate downstream accepts and that orjson
-                # refuses outright. Converting here — the last point that is
+                # isinstance(x, dict) gate downstream accepts and that the JSON
+                # encoder (msgspec) refuses outright. Converting here — the last point that is
                 # allowed to know an SDK type exists — is what keeps the rest
                 # of the platform broker-agnostic. See to_plain_payload.
                 payload = to_plain_payload(msg)

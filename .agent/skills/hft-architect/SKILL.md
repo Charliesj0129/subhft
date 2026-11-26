@@ -1,6 +1,6 @@
 ---
 name: hft-architect
-description: "Platform architecture (runtime planes, boundaries, queue and degradation design, Python-Rust split) plus the data-contract field reference. Use when changing runtime boundaries, adding a hot-path stage, or touching contracts or events.py. Not for broker details or strategy logic."
+description: "Platform architecture (runtime planes, boundaries, queue and degradation design) plus the data-contract field reference. Use when changing runtime boundaries, adding a hot-path stage, or touching contracts or events.py. Not for broker details or strategy logic."
 ---
 
 # HFT architecture
@@ -14,8 +14,8 @@ index is `docs/MODULES_REFERENCE.md`; `docs/architecture/pipeline-chains.md` tra
 | Plane | Where | Responsibility |
 |---|---|---|
 | Control | `services/` (bootstrap, system, registry), `config/` | queues, service graph, supervision, HALT enforcement |
-| Market data | `feed_adapter/`, normalizer, `lob_engine.py` | ingest, normalize, LOB state, Rust fast paths |
-| Feature | `feature/` | feature plane, Python/Rust parity |
+| Market data | `feed_adapter/`, normalizer, `lob_engine.py` | ingest, normalize, LOB state |
+| Feature | `feature/` | feature plane, live/backtest parity |
 | Decision | `strategy/`, `risk/` (validators, `storm_guard.py`) | dispatch, risk validation, StormGuard |
 | Execution | `order/`, `execution/` | order dispatch, fill routing, positions, reconciliation |
 | Persistence | `recorder/` | ClickHouse, WAL, batcher, loader |
@@ -37,14 +37,13 @@ needs the design checklist below.
 
 High-risk areas: broker adapters (protocol boundary, SDK import guards),
 recorder durability (WAL replay, dedup, schema evolution), feature-plane parity,
-Python-Rust interfaces (hidden fallbacks, copies, panics), unbounded maps
+costly interface copies and unbounded maps
 (order id map, exposure store, metric labels), ops phase transitions (a HALT
 recovery needs a manual rearm).
 
 ## Verify and update
 
 ```bash
-uv run maturin develop --manifest-path rust_core/Cargo.toml   # rebuild Rust
 make check && make hotpath-profile
 ```
 

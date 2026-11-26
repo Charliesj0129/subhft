@@ -49,7 +49,6 @@ class TestBookStateRecompute:
     def test_recompute_with_lists(self):
         """Pure-Python _recompute path when bids/asks are lists."""
         book = BookState("TST")
-        book._rust_state = None  # Disable Rust
         book.bids = _list_bids()
         book.asks = _list_asks()
         book._recompute()
@@ -60,7 +59,6 @@ class TestBookStateRecompute:
 
     def test_recompute_with_empty_lists(self):
         book = BookState("TST")
-        book._rust_state = None
         book.bids = []
         book.asks = []
         book._recompute()
@@ -69,7 +67,6 @@ class TestBookStateRecompute:
 
     def test_recompute_with_empty_numpy(self):
         book = BookState("TST")
-        book._rust_state = None
         book.bids = np.empty((0, 2), dtype=np.int64)
         book.asks = np.empty((0, 2), dtype=np.int64)
         book._recompute()
@@ -79,7 +76,6 @@ class TestBookStateRecompute:
     def test_recompute_crossed_book_zeroes_stats(self):
         """When best_bid > best_ask (crossed book), stats are zeroed."""
         book = BookState("TST")
-        book._rust_state = None
         # Crossed: bid > ask
         book.bids = [[1010000, 10]]
         book.asks = [[1000000, 8]]
@@ -91,7 +87,6 @@ class TestBookStateRecompute:
     def test_recompute_zero_top_volume(self):
         """When top level volumes are both zero, imbalance is 0."""
         book = BookState("TST")
-        book._rust_state = None
         book.bids = [[1000000, 0]]
         book.asks = [[1001000, 0]]
         book._recompute()
@@ -100,7 +95,6 @@ class TestBookStateRecompute:
     def test_recompute_one_sided_book(self):
         """Only bids, no asks."""
         book = BookState("TST")
-        book._rust_state = None
         book.bids = _list_bids()
         book.asks = []
         book._recompute()
@@ -117,7 +111,6 @@ class TestBookStateApplyUpdate:
     def test_stale_packet_rejected(self):
         """apply_update skips updates with older exch_ts."""
         book = BookState("TST")
-        book._rust_state = None
         book.apply_update(_np_bids(), _np_asks(), 2000)
         old_version = book.version
         book.apply_update(_np_bids(), _np_asks(), 1000)  # Stale
@@ -126,7 +119,6 @@ class TestBookStateApplyUpdate:
     def test_zero_ts_preserves_existing(self):
         """When new update has ts=0, existing valid ts is preserved."""
         book = BookState("TST")
-        book._rust_state = None
         book.apply_update(_np_bids(), _np_asks(), 5000)
         assert book.exch_ts == 5000
         book.apply_update(_np_bids(), _np_asks(), 0)
@@ -134,7 +126,6 @@ class TestBookStateApplyUpdate:
 
     def test_apply_update_empty_bids_clears(self):
         book = BookState("TST")
-        book._rust_state = None
         book.apply_update(_np_bids(), _np_asks(), 1000)
         book.apply_update([], [], 2000)
         assert book.bids == []
@@ -168,7 +159,6 @@ class TestBookStateUpdateTick:
 class TestBookStateGetStats:
     def test_get_stats_with_lists(self):
         book = BookState("TST")
-        book._rust_state = None
         book.bids = _list_bids()
         book.asks = _list_asks()
         book._recompute()
@@ -179,7 +169,6 @@ class TestBookStateGetStats:
 
     def test_get_stats_empty(self):
         book = BookState("TST")
-        book._rust_state = None
         stats = book.get_stats()
         assert stats.best_bid == 0
         assert stats.best_ask == 0
@@ -193,7 +182,6 @@ class TestBookStateGetStats:
 class TestBookStateGetStatsTuple:
     def test_get_stats_tuple_with_lists(self):
         book = BookState("TST")
-        book._rust_state = None
         book.bids = _list_bids()
         book.asks = _list_asks()
         book._recompute()
@@ -203,7 +191,6 @@ class TestBookStateGetStatsTuple:
 
     def test_get_stats_tuple_empty(self):
         book = BookState("TST")
-        book._rust_state = None
         t = book.get_stats_tuple()
         assert t[0] == "lobstats"
         assert t[6] == 0  # best_bid
@@ -219,7 +206,6 @@ class TestBookStateApplyUpdateWithStatsFields:
     def test_apply_update_with_stats_fields_crossed(self):
         """Crossed book zeroes stats."""
         book = BookState("TST")
-        book._rust_state = None
         book.apply_update_with_stats_fields(
             _list_bids(),
             _list_asks(),
@@ -237,7 +223,6 @@ class TestBookStateApplyUpdateWithStatsFields:
 
     def test_apply_update_with_stats_stale_rejected(self):
         book = BookState("TST")
-        book._rust_state = None
         book.apply_update_with_stats_fields(
             _list_bids(),
             _list_asks(),
@@ -267,7 +252,6 @@ class TestBookStateApplyUpdateWithStatsFields:
 
     def test_apply_update_with_stats_fields_empty_data(self):
         book = BookState("TST")
-        book._rust_state = None
         book.apply_update_with_stats_fields(
             [],
             [],
@@ -418,7 +402,6 @@ class TestLOBEngineGetBookSnapshot:
     def test_get_book_snapshot_with_data(self):
         engine = LOBEngine()
         book = engine.get_book("TST")
-        book._rust_state = None
         book.apply_update(_np_bids(), _np_asks(), 1000)
         snap = engine.get_book_snapshot("TST")
         assert snap is not None
@@ -441,7 +424,6 @@ class TestLOBEngineGetBookSnapshot:
     def test_get_book_snapshot_list_data(self):
         engine = LOBEngine()
         book = engine.get_book("TST")
-        book._rust_state = None
         book.bids = _list_bids()
         book.asks = _list_asks()
         snap = engine.get_book_snapshot("TST")
@@ -457,7 +439,6 @@ class TestLOBEngineGetL1Scaled:
     def test_get_l1_scaled_normal(self):
         engine = LOBEngine()
         book = engine.get_book("TST")
-        book._rust_state = None
         book.apply_update(_np_bids(), _np_asks(), 5000)
         l1 = engine.get_l1_scaled("TST")
         assert l1 is not None
@@ -472,7 +453,6 @@ class TestLOBEngineGetL1Scaled:
     def test_get_l1_scaled_list_data(self):
         engine = LOBEngine()
         book = engine.get_book("TST")
-        book._rust_state = None
         book.bids = _list_bids()
         book.asks = _list_asks()
         l1 = engine.get_l1_scaled("TST")
@@ -497,7 +477,6 @@ class TestLOBEngineGetMidPrice:
     def test_get_mid_price_normal(self):
         engine = LOBEngine()
         book = engine.get_book("TST")
-        book._rust_state = None
         book.apply_update(_np_bids(), _np_asks(), 1000)
         mid = engine.get_mid_price("TST")
         assert mid == (1000000 + 1001000) // 2

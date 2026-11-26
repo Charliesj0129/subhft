@@ -17,8 +17,7 @@ The local archive is the only durable copy and upstream retains ~2 months, so a 
 ## Book depth is variable length, never assume 5
 
 `bids_price`/`asks_price`/`bids_vol`/`asks_vol` are **0-5 elements, not fixed
-L5**. The normalizer's Rust kernel (`scale_book_seq_inner`,
-`rust_core/src/fast_lob/scale.rs`) keeps only levels with `price > 0`, so
+L5**. The Python normalizer keeps only levels with `price > 0`, so
 `length(bids_price)` is the number of levels the exchange actually priced.
 There is no cap and no slice anywhere on the path: a short array means market
 thinness, never truncation or a recording defect.

@@ -71,10 +71,10 @@ _on_shioaji_event()  ───────┼──→ call_soon_threadsafe(_enq
 | 2 | `call_soon_threadsafe()` (inside `_on_shioaji_event`) | `services/market_data.py` | (exchange, msg) | **Thread boundary** | Async transition |
 | 3 | `_enqueue_raw()` | `services/market_data.py` | → `raw_queue` | `asyncio.Queue.put_nowait()` | Non-blocking O(1) |
 | 4 | `MarketDataService.run()` main loop | `services/market_data.py` | `raw_queue.get()` | Async dequeue | Event-loop wait |
-| 5a | `normalize_tick()` | `feed_adapter/normalizer.py` | Raw → `TickEvent` (price x10000) | Inline, Rust optional | Sync <10μs |
-| 5b | `normalize_bidask()` | `feed_adapter/normalizer.py` | Raw → `BidAskEvent` (np.int64) | Inline, Rust optional | Sync <10μs |
+| 5a | `normalize_tick()` | `feed_adapter/normalizer.py` | Raw → `TickEvent` (price x10000) | Inline, Python | Sync <10μs |
+| 5b | `normalize_bidask()` | `feed_adapter/normalizer.py` | Raw → `BidAskEvent` (np.int64) | Inline, Python | Sync <10μs |
 | 6 | `LOBEngine.process_event()` | `feed_adapter/lob_engine.py` | BidAsk/Tick → `LOBStatsEvent` | In-memory book | Sync <5μs |
-| 7 | `FeatureEngine.process_lob_stats()` | `feature/engine.py` | LOBStats → `FeatureUpdateEvent` (27 features) | Inline, Rust kernel optional | Sync <20μs |
+| 7 | `FeatureEngine.process_lob_stats()` | `feature/engine.py` | LOBStats → `FeatureUpdateEvent` (27 features) | Inline, Python | Sync <20μs |
 | 8 | `RingBufferBus.publish_nowait()` | `engine/event_bus.py` | Event → ring buffer cursor | Lock-free single-writer | Sync O(1) <1μs |
 
 ### Thread Boundaries
@@ -94,8 +94,53 @@ _on_shioaji_event()  ───────┼──→ call_soon_threadsafe(_enq
 |----------|---------|---------|
 | `HFT_FEATURE_ENGINE_ENABLED` | `1` | Skip stage 7 if `0` |
 | `HFT_EVENT_MODE` | `event` | `tuple` mode skips dataclass allocation |
-| `HFT_FUSED_NORMALIZER` | `0` | Fuse stages 5+6 into single Rust call |
-| `HFT_RUST_ACCEL` | `1` | Enable Rust fast-paths in normalizer/LOB |
+| `HFT_MD_WORKERS` | `0` | N symbol-sharded MD worker threads (0 = single-loop path) |
+| `HFT_MD_COMMIT_BUDGET` | `256` | Max results committed per loop turn with workers on |
+
+### Sharded Workers (`HFT_MD_WORKERS`, default 0 = off)
+
+With `HFT_MD_WORKERS=0` the chain above is unchanged. With N >= 1
+(`services/_md_sharded.py`):
+
+```
+broker thread: _on_shioaji_event --offer()--> ShardedMDPipeline
+  crc32(symbol) % N (shard cache capped at 4096) -> worker inbox
+     | (bounded deque, raw_queue_size // N); overflow: drop + per-worker
+     | counter; loop polls each drain and every 10 ms -> _escalate_raw_drop(n)
+     v   (same metric / StormGuard ladder, consecutive = max over shards)
+worker thread k: normalize -> LOBEngine.process_event -> features
+                 -> (symbol, event, stats, feature_update, l1, features)
+     | SPSC outbox deque, one call_soon_threadsafe per batch
+     v
+event loop: ShardedMDPipeline.drain()  <= HFT_MD_COMMIT_BUDGET (256)/turn,
+  then loop.call_soon(drain) so fills / CANCEL / HALT callbacks run between
+  -> drop stale-epoch results -> CommittedMDView.publish -> feed-gap stamp
+  -> first-event log / feed counters -> recorder -> bus -> redis
+```
+
+- Per-symbol order is kept (one worker per symbol, FIFO outbox); cross-symbol
+  order is not.
+- Only the loop publishes to the bus, so `HFT_BUS_SINGLE_WRITER=1` stays valid.
+- Loop readers use `CommittedMDView`, never worker-mutated state: strategy
+  sources (`StrategyRunner.bind_committed_md_view`: L1, book snapshot,
+  feature tuple/value/view, staleness), the TCA mid in `bootstrap.py`, and
+  `PriceBandValidator` when given the view (freshness from committed L1 ts).
+- Worker StormGuard calls go through a loop-forwarding proxy held by the
+  workers only; `svc._storm_guard` stays the real guard. Norm/feature
+  failure counters are per worker. Feature shadow parity is skipped.
+- LOB/feature resets (`_trigger_reconnect`, `_apply_post_reconnect_resets`,
+  `QuoteConnectionPool._notify_warmup_reset` via `set_reset_router`) are
+  queued as commands on each owning worker, ordered with its events, and
+  touch only the named symbols; the loop never blocks. Events before the
+  command are computed and committed (recorded, published) as the single-loop
+  path handles events processed before its reset; the reset marker then
+  clears the committed view for those symbols. After a successful reconnect
+  the queued inputs are drained (`stale_drained`, logged), matching the
+  DATA-010 raw_queue drain. If the reset cannot be queued
+  (pipeline down), `_trigger_reconnect` reports DISCONNECTED, not CONNECTED.
+- Worker crash: admission stops, `trigger_halt("md_worker_crash: ...")`,
+  `run()` raises `MDWorkerCrashedError` so the supervisor sees the task fail.
+- Bench: `scripts/latency/md_sharded_bench.py`.
 
 ---
 
@@ -256,7 +301,7 @@ def _on_exec(self, topic, data):
 - **Daily-loss feed**: `RiskEngine.notify_fill_pnl` receives the realized-PnL change net of `fill.fee` (the all-in charge, tax included); an opening fill sends its fee as a loss
 - **Recovered lots**: a fill takes a parked recovery lot only for a key with no live position, and never one recorded under another strategy. Risk, MtM, loss exit, reconciliation, the flattener, the PnL snapshot exporter and the daily report read positions plus recovery (`snapshot_open_positions` / `snapshot_positions_with_recovery`)
 - **Orphaned fills**: strategy_id="UNKNOWN" → `OrphanedFillDLQ`, retry every 100 events
-- **Position update**: Atomic under `_fill_lock` (threading.Lock) for Rust/Python dual-tracker
+- **Position update**: Atomic under `_fill_lock` (threading.Lock) for position and recovery state
 - **TCA enrichment**: `cmd_tca_map[order_id]` → `decision_price` + `arrival_price` stamped on FillEvent
 - **Recording safety**: Direct `recorder_queue` write (bypasses Bus to prevent tick flood overwriting fills)
 - **WAL fallback**: When `recorder_queue` full → WALWriter for fill durability

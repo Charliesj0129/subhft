@@ -7,7 +7,7 @@
 ```
 SystemBootstrapper.build()
   ├─ Queues: raw(65536), raw_exec(8192), risk(4096), order(2048), recorder(16384)
-  ├─ RingBufferBus (Rust lock-free)
+  ├─ RingBufferBus (Python ring)
   ├─ MarketDataService ← raw_queue consumer, bus+recorder publisher
   ├─ FeatureEngine (v3, 27 features) ← LOBEngine output, FeatureUpdateEvent publisher
   ├─ StrategyRunner ← bus consumer → OrderIntent → risk_queue
@@ -68,7 +68,6 @@ SystemBootstrapper.build()
 | OpportunisticMM | opportunistic_mm.py | Reactive MM with spread gate + toxicity filter | Shadow |
 | CascadeBounce | cascade_bounce.py | Contrarian bounce after cascade move | Shadow (TMF) |
 | ElectronicEye | electronic_eye.py | TXO options MM (Guardian/Quoter/Hedger) | Scaffold |
-| RustAlpha | rust_alpha.py | Rust-accelerated alpha executor | Active |
 | VPINRegimeSwitch | vpin_regime_switch.py | VPIN-based regime detection | Research |
 | MMHawkes | mm_hawkes.py | Hawkes-process market-making | Research |
 

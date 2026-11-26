@@ -110,17 +110,9 @@ class TestNotionalCapIsNtd:
             assert v.check(_intent("2330", points=100_001))[0] is False
 
 
-class TestRustDoesNotJudgeNotional:
-    """HFT_RISK_RUST_VALIDATOR=1: the kernel has no reduce exemption and returns first."""
-
+class TestNotionalExitExemptions:
     @pytest.fixture
-    def rust_engine(self, monkeypatch: pytest.MonkeyPatch):
-        from hft_platform.risk.engine import _load_rust_risk_validator
-
-        if _load_rust_risk_validator() is None:
-            pytest.skip("rust_core RustRiskValidator not built")
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "1")
-
+    def make_engine(self):
         def build(position: int) -> RiskEngine:
             provider = SymbolMetadataPriceScaleProvider(_Metadata())
             with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
@@ -133,19 +125,18 @@ class TestRustDoesNotJudgeNotional:
                 storm_guard=sg,
                 position_provider=lambda symbol, strategy_id: position,
             )
-            assert engine._rust_validator is not None
             return engine
 
         return build
 
-    def test_an_over_cap_position_can_still_be_closed(self, rust_engine) -> None:
-        """23 TMF at 45,000 = 10,350,000 NTD. Rust used to reject it as MAX_NOTIONAL."""
-        engine = rust_engine(position=23)
+    def test_an_over_cap_position_can_still_be_closed(self, make_engine) -> None:
+        """23 TMF at 45,000 = 10,350,000 NTD."""
+        engine = make_engine(position=23)
         decision = engine.evaluate(_intent("TMFK6", side=Side.SELL, qty=23))
         assert decision.approved is True, decision.reason_code
 
-    def test_an_opening_txf_lot_is_still_rejected_by_python(self, rust_engine) -> None:
-        engine = rust_engine(position=0)
+    def test_an_opening_txf_lot_is_still_rejected_by_python(self, make_engine) -> None:
+        engine = make_engine(position=0)
         decision = engine.evaluate(_intent("TXFK6"))
         assert decision.approved is False
         assert "NOTIONAL_EXCEEDED" in decision.reason_code

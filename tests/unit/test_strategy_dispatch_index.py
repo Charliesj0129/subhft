@@ -68,7 +68,6 @@ class TestStrategyDispatchIndex:
         runner._circuit_states = {}
         runner._circuit_success_counts = {}
         runner._circuit_halted_at_ns = {}
-        runner._rust_circuit = None
         runner._position_key_cache = {}
         runner._feature_compat_fail_fast = False
         runner._strategies_version = 0

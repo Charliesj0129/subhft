@@ -378,9 +378,18 @@ class OrderGateway:
         if not oc_type:
             return sdk.constant.FuturesOCType.Auto
         key = str(oc_type).strip().lower().replace("_", "").replace("-", "")
-        mapping = {"auto": "Auto", "new": "New", "close": "Close"}
-        name = mapping.get(key, "Auto")
-        return getattr(sdk.constant.FuturesOCType, name, sdk.constant.FuturesOCType.Auto)
+        mapping = {
+            "auto": "Auto",
+            "new": "New",
+            "open": "New",
+            "close": "Cover",
+            "cover": "Cover",
+            "daytrade": "DayTrade",
+        }
+        name = mapping.get(key)
+        if name is None:
+            raise ValueError(f"Unsupported futures oc_type {oc_type!r}")
+        return getattr(sdk.constant.FuturesOCType, name)
 
     def warm_session(self) -> bool:
         """Probe the order connection so its transport session is established.

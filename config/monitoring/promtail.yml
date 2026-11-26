@@ -16,16 +16,36 @@ clients:
     timeout: 10s
 
 scrape_configs:
-  # Docker container logs via Docker socket
-  - job_name: docker
+  # Docker container logs via Docker socket: one scrape job per service (hft-engine,
+  # hft-monitor, redis), each restricted by a Docker API filter. The wal-loader and
+  # clickhouse jobs below follow the same single-value form.
+  #
+  # Why the filter is in the Docker API and not in a relabel `keep`: on promtail 3.0.0 a
+  # relabel `keep` does not stop docker_sd from tailing the container. It is still tailed,
+  # with empty labels, and Loki rejects the whole batch (incident 2026-11-14). A container the
+  # API filter does not return is never tailed at all.
+  #
+  # Why one job per service: Docker ANDs several values of one `label` filter, so a single
+  # job listing several services would match nothing. Each job has exactly one value.
+  #
+  # Why the service label and not the compose project name: the production stack runs as
+  # project `subhft`, and an earlier `com.docker.compose.project=hft_platform` filter matched
+  # nothing there. Trade-off: a service-only filter matches a same-named service in ANY
+  # compose project on the host.
+  #
+  # The relabel_configs and pipeline_stages are written once, under the hft-engine job
+  # (anchors &docker_relabel and &docker_pipeline), and reused by alias in the other two jobs,
+  # so the redaction cannot drift between jobs. To add a service, copy one of the later jobs
+  # and change the job_name and the filter value.
+  - job_name: hft-engine
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
         filters:
           - name: label
-            values: ["com.docker.compose.project=hft_platform"]
+            values: ["com.docker.compose.service=hft-engine"]
 
-    relabel_configs:
+    relabel_configs: &docker_relabel
       # Extract container name as label
       - source_labels: ["__meta_docker_container_name"]
         regex: "/(.*)"
@@ -36,12 +56,9 @@ scrape_configs:
       # Set job label from service name
       - source_labels: ["service"]
         target_label: job
-      # Drop non-HFT containers
-      - source_labels: ["service"]
-        regex: "(hft-engine|hft-monitor|wal-loader|clickhouse|redis)"
-        action: keep
+      # No `keep` rule: the Docker API filter on each job already restricts the containers.
 
-    pipeline_stages:
+    pipeline_stages: &docker_pipeline
       # Redact BEFORE anything is parsed, labelled or shipped to Loki. Some of what the
       # engine prints never passes through our own log scrubber: the Shioaji SDK's native
       # layer writes lines such as
@@ -52,11 +69,12 @@ scrape_configs:
       # python-telegram-bot's HTTP client puts the bot token in a request URL. Neither can
       # be fixed in Python, so mask them here.
       #
-      # STATUS: this job's filter is `com.docker.compose.project=hft_platform`. A stack that
-      # runs under any other compose project name matches no container here, and then the
-      # hft-engine / hft-bot / hft-monitor logs are NOT in Loki (the wal-loader job below
-      # filters on the service label only). These stages exist so that fixing the filter does
-      # not start shipping the raw account id. The raw line stays in the host's `docker logs`
+      # STATUS (2026-11-24): all three docker jobs run this one pipeline through the
+      # &docker_pipeline anchor, so each of them redacts before it parses. Before 2026-11-13 the
+      # docker job's filter was `com.docker.compose.project=hft_platform`, which matched no
+      # container on a host that runs the stack under another project name, so the hft-engine /
+      # hft-bot / hft-monitor logs were NOT in Loki. These stages exist so that fixing the filter
+      # does not start shipping the raw account id. The raw line stays in the host's `docker logs`
       # (json-file) until rotation drops it either way.
       #
       # Taiwan national ID shape: letter, 1 or 2, eight digits, not inside a longer token.
@@ -112,6 +130,30 @@ scrape_configs:
           strategy:
           symbol:
           error:
+
+  - job_name: hft-monitor
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.service=hft-monitor"]
+
+    relabel_configs: *docker_relabel
+
+    pipeline_stages: *docker_pipeline
+
+  - job_name: redis
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.service=redis"]
+
+    relabel_configs: *docker_relabel
+
+    pipeline_stages: *docker_pipeline
 
   # WAL loader logs (separate job)
   - job_name: wal-loader

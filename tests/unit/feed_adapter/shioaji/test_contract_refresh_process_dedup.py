@@ -180,7 +180,7 @@ def test_second_pooled_facade_reuses_the_first_facades_rebuild(tmp_path):
     tse_a = _CountingContracts([_contract("TXFH6"), _contract("TXFI6")])
     tse_b = _CountingContracts([_contract("TXFH6"), _contract("TXFI6")])
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         a = ShioajiClient(config_path=str(_make_shard(tmp_path, 0)))
         b = ShioajiClient(config_path=str(_make_shard(tmp_path, 1)))
         try:
@@ -207,7 +207,7 @@ def test_reusing_facade_computes_relevance_against_its_own_subscriptions(tmp_pat
     tse_a = _CountingContracts([_contract("TXFH6")])
     tse_b = _CountingContracts([_contract("TXFH6")])
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         a = ShioajiClient(config_path=str(_make_shard(tmp_path, 0)))
         b = ShioajiClient(config_path=str(_make_shard(tmp_path, 1)))
         try:
@@ -238,7 +238,7 @@ def test_non_pool_clients_never_share_a_rebuild(tmp_path):
     tse_a = _CountingContracts([_contract("TXFH6")])
     tse_b = _CountingContracts([_contract("TXFH6")])
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         a = ShioajiClient(config_path=str(_make_canonical(tmp_path, "a.yaml")))
         b = ShioajiClient(config_path=str(_make_canonical(tmp_path, "b.yaml")))
         try:
@@ -262,7 +262,7 @@ def test_rebuild_older_than_the_share_window_is_not_reused(tmp_path):
     tse_a = _CountingContracts([_contract("TXFH6")])
     tse_b = _CountingContracts([_contract("TXFH6")])
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         a = ShioajiClient(config_path=str(_make_shard(tmp_path, 0)))
         b = ShioajiClient(config_path=str(_make_shard(tmp_path, 1)))
         try:
@@ -295,7 +295,7 @@ def test_sibling_arriving_before_the_owner_publishes_waits_and_reuses(tmp_path):
     tse_b = _CountingContracts([_contract("TXFH6"), _contract("TXFI6")])
     errors: list = []
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         a = ShioajiClient(config_path=str(_make_shard(tmp_path, 0)))
         b = ShioajiClient(config_path=str(_make_shard(tmp_path, 1)))
         try:
@@ -343,7 +343,7 @@ def test_sibling_rebuilds_itself_when_the_owners_cycle_aborts(tmp_path):
     tse_b = _CountingContracts([_contract("2330")])
     errors: list = []
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         a = ShioajiClient(config_path=str(_make_shard(tmp_path, 0)))
         b = ShioajiClient(config_path=str(_make_shard(tmp_path, 1)))
         try:
@@ -382,7 +382,7 @@ def test_sibling_gives_up_and_rebuilds_after_the_slot_wait_timeout(tmp_path):
     tse_b = _CountingContracts([_contract("TXFH6")])
     errors: list = []
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         a = ShioajiClient(config_path=str(_make_shard(tmp_path, 0)))
         b = ShioajiClient(config_path=str(_make_shard(tmp_path, 1)))
         try:

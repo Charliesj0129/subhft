@@ -1,5 +1,4 @@
-"""Coverage tests for feature/engine.py — missing lines 29-35, 94/99/102/105-106,
-291, 328, 382-395, 405/410/433-437."""
+"""Additional feature engine state, reset and boundary tests."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import os
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from hft_platform.events import LOBStatsEvent
 from hft_platform.feature.engine import (
@@ -39,32 +37,6 @@ def _stats(
         bid_depth=bq,
         ask_depth=aq,
     )
-
-
-# ---------------------------------------------------------------------------
-# Rust import fallback — lines 29-35
-# ---------------------------------------------------------------------------
-
-
-class TestRustImportFallback:
-    def test_rust_backend_available_is_bool(self) -> None:
-        eng = FeatureEngine()
-        result = eng.rust_backend_available()
-        assert isinstance(result, bool)
-
-    def test_engine_works_when_rust_unavailable(self) -> None:
-        with patch("hft_platform.feature.engine._RUST_LOB_FEATURE_KERNEL_V1", None):
-            with patch("hft_platform.feature.engine._RUST_FEATURE_PIPELINE_V1", None):
-                eng = FeatureEngine(kernel_backend="python")
-        evt = eng.process_lob_stats(_stats())
-        assert evt is not None
-
-    def test_rust_backend_false_when_patched_none(self) -> None:
-        # rust_backend_available() reads the module-level var directly, so we must keep
-        # the patch active when calling it.
-        with patch("hft_platform.feature.engine._RUST_LOB_FEATURE_KERNEL_V1", None):
-            eng = FeatureEngine()
-            assert eng.rust_backend_available() is False
 
 
 # ---------------------------------------------------------------------------
@@ -104,37 +76,6 @@ class TestEngineTopQty:
         bad.__getitem__ = MagicMock(side_effect=RuntimeError("bad index"))
         result = _top_qty(bad)
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Rust backend gap warning — line 291
-# ---------------------------------------------------------------------------
-
-
-class TestRustBackendGapWarning:
-    def test_rust_backend_with_v3_features_warns_and_works(self) -> None:
-        """v3 has 27 features but Rust kernel only does 16 → gap warning on line 291."""
-        sentinel = object()
-        with patch("hft_platform.feature.engine._RUST_LOB_FEATURE_KERNEL_V1", sentinel):
-            # backend=rust, feature_set_id=lob_shared_v3 (27 features > 16)
-            eng = FeatureEngine(kernel_backend="rust", feature_set_id="lob_shared_v3")
-        # Engine should still be created (no error), backend should be "rust"
-        assert eng.kernel_backend() == "rust"
-
-    def test_fused_rust_values_match_schema_length_v3(self) -> None:
-        """The fused pipeline returns 16 values; they must be padded to the 27-feature schema."""
-        import hft_platform.feature.engine as engine_mod
-
-        if engine_mod._RUST_FEATURE_PIPELINE_V1 is None or engine_mod._RUST_LOB_FEATURE_KERNEL_V1 is None:
-            pytest.skip("rust_core extension not built")
-        rust = FeatureEngine(kernel_backend="rust", feature_set_id="lob_shared_v3", emit_events=True)
-        python = FeatureEngine(kernel_backend="python", feature_set_id="lob_shared_v3", emit_events=True)
-        got = rust.process_lob_stats(_stats())
-        ref = python.process_lob_stats(_stats())
-        assert got is not None and ref is not None
-        assert len(got.values) == len(got.feature_ids) == 27
-        assert got.values[:16] == ref.values[:16]
-        assert got.values[16:] == (0,) * 11
 
 
 # ---------------------------------------------------------------------------
@@ -183,58 +124,7 @@ class TestHasSymbol:
 # ---------------------------------------------------------------------------
 
 
-class TestResetSymbolRustKernel:
-    def test_reset_symbol_with_rust_kernel_having_reset_method(self) -> None:
-        """Covers lines 382-387: kernel.reset() is called when available."""
-        eng = FeatureEngine()
-        eng.process_lob_stats(_stats(symbol="TXFD6"))
-
-        # Inject a fake rust kernel for the symbol
-        mock_kernel = MagicMock()
-        mock_kernel.reset = MagicMock()
-        eng._rust_kernels["TXFD6"] = mock_kernel
-
-        eng.reset_symbol("TXFD6")
-        mock_kernel.reset.assert_called_once()
-
-    def test_reset_symbol_with_rust_pipeline_having_reset_method(self) -> None:
-        """Covers lines 389-394: pipeline.reset() is called when available."""
-        eng = FeatureEngine()
-        eng.process_lob_stats(_stats(symbol="TXFD6"))
-
-        mock_pipeline = MagicMock()
-        mock_pipeline.reset = MagicMock()
-        eng._rust_pipelines["TXFD6"] = mock_pipeline
-
-        eng.reset_symbol("TXFD6")
-        mock_pipeline.reset.assert_called_once()
-
-    def test_reset_symbol_kernel_reset_exception_suppressed(self) -> None:
-        """Covers the except block: exception in kernel.reset() is suppressed."""
-        eng = FeatureEngine()
-        eng.process_lob_stats(_stats(symbol="TXFD6"))
-
-        mock_kernel = MagicMock()
-        mock_kernel.reset = MagicMock(side_effect=RuntimeError("reset failed"))
-        eng._rust_kernels["TXFD6"] = mock_kernel
-
-        # Should not raise
-        eng.reset_symbol("TXFD6")
-        assert not eng.has_symbol("TXFD6")
-
-    def test_reset_symbol_without_reset_method(self) -> None:
-        """Kernel object without a reset method — getattr returns None, not callable."""
-        eng = FeatureEngine()
-        eng.process_lob_stats(_stats(symbol="TXFD6"))
-
-        class NoResetKernel:
-            pass
-
-        eng._rust_kernels["TXFD6"] = NoResetKernel()
-        # Should not raise
-        eng.reset_symbol("TXFD6")
-        assert not eng.has_symbol("TXFD6")
-
+class TestResetSymbol:
     def test_reset_symbol_removes_event_cache(self) -> None:
         """reset_symbol clears event_cache entry for the symbol."""
         eng = FeatureEngine()
@@ -293,13 +183,6 @@ class TestResetAll:
         eng.process_lob_stats(_stats(symbol="TXFD6"))
         eng.reset_all()
         assert len(eng._lob_kernel_states) == 0
-
-    def test_reset_all_clears_rust_structures(self) -> None:
-        eng = FeatureEngine()
-        eng.process_lob_stats(_stats(symbol="TXFD6"))
-        eng.reset_all()
-        assert len(eng._rust_kernels) == 0
-        assert len(eng._rust_pipelines) == 0
 
     def test_reset_all_clears_warmup_ready_symbols(self) -> None:
         eng = FeatureEngine()

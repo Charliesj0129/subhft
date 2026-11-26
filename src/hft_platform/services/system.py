@@ -36,6 +36,7 @@ from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContra
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
 from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, heartbeat_writable, write_heartbeat
 from hft_platform.services.loop_watchdog import LoopStallWatchdog
+from hft_platform.utils import jsonfast
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
@@ -1181,6 +1182,11 @@ class HFTSystem:
                 # alive, and a watchdog that relogs in a session nobody uses
                 # would spend the account's session allowance for nothing.
                 self._start_service("order_session_watchdog", self._order_session_watchdog())
+                # The pre-open warmup asks for the same guarded relogin when its
+                # probe windows keep failing; it never reaches the broker itself.
+                warmup = getattr(self.registry, "order_session_warmup", None)
+                if warmup is not None:
+                    warmup.on_exhausted = self._reconnect_order_session
 
                 # ── Checkpoint Writer (after recovery, before trading) ──
                 if self._recovery_halted:
@@ -1692,6 +1698,18 @@ class HFTSystem:
         if failures < threshold:
             return "healthy"
 
+        return await self._reconnect_order_session("order_session_not_established", failures)
+
+    async def _reconnect_order_session(self, reason: str, failures: int = 0) -> str:
+        """Relogin the order session through the guarded ``reconnect`` path.
+
+        Shared by the watchdog (orders kept dying) and the pre-open warmup
+        (its probe windows kept failing, ``OrderSessionWarmup.on_exhausted``).
+        Returns what it did.
+        """
+        from hft_platform.observability.metrics import MetricsRegistry  # noqa: PLC0415
+
+        metrics = MetricsRegistry.get()
         reconnect = getattr(self.order_client, "reconnect", None)
         if reconnect is None:
             # A broker facade with no reconnect (sim/no-op clients). Say so
@@ -1700,7 +1718,7 @@ class HFTSystem:
             logger.error("order_session_down_but_client_cannot_reconnect", consecutive_session_errors=failures)
             return "cannot_reconnect"
 
-        logger.warning("order_session_reconnect_attempt", consecutive_session_errors=failures, threshold=threshold)
+        logger.warning("order_session_reconnect_attempt", reason=reason, consecutive_session_errors=failures)
         loop = asyncio.get_running_loop()
         # force=False on purpose: the orchestrator's cooldown, backoff and
         # process-wide login slot are what stop a persistently dead session
@@ -1708,7 +1726,7 @@ class HFTSystem:
         # allowance and earns everything a 451.
         ok = await loop.run_in_executor(
             None,
-            lambda: reconnect(reason="order_session_not_established", force=False),
+            lambda: reconnect(reason=reason, force=False),
         )
         if not ok:
             metrics.order_session_reconnect_total.labels(result="fail").inc()
@@ -3034,7 +3052,10 @@ class HFTSystem:
         try:
             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
-            get_orphaned_fill_dlq().persist()
+            _fill_dlq = get_orphaned_fill_dlq()
+            _fill_dlq.persist()
+            if _fill_dlq.last_unrecovered:
+                logger.critical("fill_dlq_fills_without_durable_copy_at_shutdown", count=_fill_dlq.last_unrecovered)
         except Exception as exc:
             logger.warning("fill_dlq_persist_failed_shutdown", error=str(exc))
 
@@ -3219,17 +3240,6 @@ class HFTSystem:
         is the last-resort path after all queues/buffers are exhausted.
         """
         try:
-            import orjson as _json_mod
-
-            def _ser(obj):
-                return _json_mod.dumps(obj)
-        except ImportError:
-            import json as _json_mod  # type: ignore[no-redef]
-
-            def _ser(obj):
-                return _json_mod.dumps(obj, separators=(",", ":")).encode("utf-8")
-
-        try:
             payload = {
                 "topic": getattr(event, "topic", "unknown"),
                 "data": getattr(event, "data", {}),
@@ -3239,7 +3249,7 @@ class HFTSystem:
             dlq_path = os.path.join(os.getenv("HFT_STATE_DIR", ".state"), "exec_overflow_dlq.jsonl")
             os.makedirs(os.path.dirname(dlq_path), exist_ok=True)
             with open(dlq_path, "ab") as f:
-                f.write(_ser(payload) + b"\n")
+                f.write(jsonfast.dumps(payload) + b"\n")
         except Exception as exc:
             logger.error("exec_overflow_dlq_write_failed", error=str(exc))
 

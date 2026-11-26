@@ -6,20 +6,10 @@ import time
 
 from structlog import get_logger
 
-from hft_platform.monitor._redis_wire import _DEFAULT_TIMEOUT_S
-
-try:
-    import orjson
-
-    _loads = orjson.loads
-except ImportError:
-    import json
-
-    _loads = json.loads
-
 from hft_platform.core import timebase
-from hft_platform.monitor._redis_wire import RedisClient
+from hft_platform.monitor._redis_wire import _DEFAULT_TIMEOUT_S, RedisClient
 from hft_platform.monitor._types import RowView
+from hft_platform.utils.jsonfast import loads as _loads
 
 logger = get_logger("monitor.redis_poller")
 

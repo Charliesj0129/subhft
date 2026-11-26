@@ -30,7 +30,7 @@ Hooks and `permissions.ask`/`deny` enforce the red lines; they add no policy.
 - Skills: `.agent/skills/<name>/SKILL.md`, exposed to Claude Code as
   `.claude/skills` and to Codex as `.agents/skills` (symlinks). The
   frontmatter `description` says when each applies.
-- Nested `AGENTS.md` files (`rust_core/`, `tests/`, `research/`) are imported
+- Nested `AGENTS.md` files (`tests/`, `research/`) are imported
   by a sibling `CLAUDE.md` and load when you work in that subtree.
 - Auto-memory (`MEMORY.md`) is an index with a hard size cap; `.agent/memory/`
   and the repo are the source of truth for laws and risks. Memory notes can be

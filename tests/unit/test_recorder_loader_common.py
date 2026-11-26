@@ -113,13 +113,8 @@ class TestJsonCodec:
 
     def test_loads_handles_bytes_input(self) -> None:
         m = _import_module()
-        # Both orjson and stdlib json can handle bytes
-        try:
-            result = m._loads(b'{"x": 2}')
-            assert result == {"x": 2}
-        except TypeError:
-            # stdlib json does not accept bytes on older Python — acceptable
-            pass
+        result = m._loads(b'{"x": 2}')
+        assert result == {"x": 2}
 
 
 # ---------------------------------------------------------------------------

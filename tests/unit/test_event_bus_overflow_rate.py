@@ -7,10 +7,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _disable_rust_bus(monkeypatch):
-    """Force Python-only bus mode for deterministic testing."""
-    monkeypatch.setenv("HFT_BUS_RUST", "0")
-    monkeypatch.setenv("HFT_BUS_MODE", "python")
+def _use_event_wait_mode(monkeypatch):
     monkeypatch.setenv("HFT_BUS_WAIT_MODE", "event")
 
 

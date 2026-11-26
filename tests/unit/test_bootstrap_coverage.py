@@ -114,6 +114,8 @@ def _mock_services():
         started.append(p)
         name = p.attribute
         mocks[name] = m
+    # HFT_MD_WORKERS=0 (the default) leaves committed_view None; a bare MagicMock would invent one.
+    mocks["MarketDataService"].return_value.committed_view = None
     yield mocks
     for p in started:
         p.stop()
@@ -1959,23 +1961,21 @@ class TestConfigSnapshotFailure:
 
 
 # ===================================================================
-# AD. Alertmanager bridge failure (lines 1210-1211)
+# AD. Alertmanager bridge lives in hft-bot, not the engine
 # ===================================================================
 
 
-class TestAlertmanagerBridgeFailure:
-    """Alertmanager bridge init failure is caught gracefully."""
+class TestAlertmanagerBridgeNotInEngine:
+    """The engine must not build the bridge: it runs in hft-bot so alerts survive an engine stop."""
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
-    def test_alertmanager_bridge_failure_does_not_crash(self):
-        """AlertmanagerBridge raising doesn't crash build (lines 1210-1211)."""
-        with patch(
-            "hft_platform.notifications.alertmanager_bridge.AlertmanagerBridge",
-            side_effect=ImportError("no bridge module"),
-        ):
+    def test_engine_build_does_not_construct_the_alertmanager_bridge(self):
+        """Building the engine registry never constructs AlertmanagerBridge."""
+        with patch("hft_platform.notifications.alertmanager_bridge.AlertmanagerBridge") as bridge_cls:
             registry = _build_with_mocks()
 
         assert registry is not None
+        bridge_cls.assert_not_called()
 
 
 # ===================================================================

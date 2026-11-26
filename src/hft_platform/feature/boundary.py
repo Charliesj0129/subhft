@@ -8,7 +8,7 @@ from hft_platform.events import FeatureUpdateEvent
 
 @dataclass(slots=True)
 class TypedFeatureFrameV1:
-    """Prototype typed boundary frame for Python/Rust feature-plane transport.
+    """Prototype typed boundary frame for feature-plane transport.
 
     v1 encodes mixed numeric values using:
     - `value_kind_mask` bit i = 1 => values_f64[i] slot used, else values_i64[i]

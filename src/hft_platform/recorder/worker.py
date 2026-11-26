@@ -9,6 +9,7 @@ from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 from hft_platform.recorder.health import PipelineHealthTracker
 from hft_platform.recorder.mode import RecorderMode, get_recorder_mode
 from hft_platform.recorder.writer import DataWriter
+from hft_platform.utils import jsonfast
 
 logger = get_logger("recorder")
 
@@ -509,10 +510,6 @@ def _extract_explanation_values(row) -> list | None:
     """
     if row is None:
         return None
-    try:
-        import orjson  # noqa: PLC0415 — local import keeps import-time cheap
-    except ImportError:  # pragma: no cover
-        import json as orjson  # type: ignore[no-redef]
 
     def _enc(v: object) -> str:
         if v is None:
@@ -520,8 +517,7 @@ def _extract_explanation_values(row) -> list | None:
         if isinstance(v, (str, bytes)):
             return v if isinstance(v, str) else v.decode("utf-8", errors="replace")
         try:
-            data = orjson.dumps(v)
-            return data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
+            return jsonfast.dumps_str(v)
         except Exception:  # noqa: BLE001
             return str(v)
 

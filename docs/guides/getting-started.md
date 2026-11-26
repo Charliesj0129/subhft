@@ -10,7 +10,6 @@
 
 選用：
 - Docker + Docker Compose
-- Rust toolchain（需要重編 `rust_core` 時）
 
 檢查：
 ```bash

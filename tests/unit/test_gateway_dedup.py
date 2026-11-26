@@ -240,79 +240,41 @@ def test_dedup_lru_promoted_key_survives_eviction():
     assert k0_result is not None
 
 
-def test_dedup_commit_typed_with_mock_rust_store():
-    """commit_typed() delegates to Rust store when available."""
+def test_dedup_uses_persisted_window_with_legacy_acceleration_flag(monkeypatch, tmp_path):
+    import sys
+    from types import ModuleType
+    from unittest.mock import Mock
 
-    class _MockRust:
-        def __init__(self):
-            self.calls = []
+    stale_extension = ModuleType("hft_platform.rust_core")
+    stale_extension.RustDedupStore = Mock()
+    monkeypatch.setitem(sys.modules, stale_extension.__name__, stale_extension)
+    monkeypatch.setenv("HFT_DEDUP_RUST", "1")
 
-        def commit(self, key, approved, reason_code, cmd_id):
-            self.calls.append((key, approved, reason_code, cmd_id))
+    persist_path = str(tmp_path / "gateway.jsonl")
+    store = IdempotencyStore(persist_path=persist_path, persist_enabled=True)
+    assert store.check_or_reserve_typed("order-1") is None
+    store.commit_typed("order-1", False, "HALT", 42)
+    store.persist()
 
-    store = IdempotencyStore(window_size=100, persist_enabled=False)
-    mock = _MockRust()
-    store._rust_store = mock
-    store.commit_typed("rust-key", True, "OK", 55)
-    assert mock.calls == [("rust-key", True, "OK", 55)]
-    # Python store should not have been updated
-    assert store.size() == 0
-
-
-def test_dedup_check_or_reserve_typed_hit_approved_true():
-    """check_or_reserve_typed() with Rust store returns approved=True when approved==1."""
-
-    class _MockRust:
-        def check_or_reserve(self, key):
-            return (True, 1, "OK", 42)
-
-    store = IdempotencyStore(window_size=100, persist_enabled=False)
-    store._rust_store = _MockRust()
-    rec = store.check_or_reserve_typed("some-key")
-    assert rec is not None
-    assert rec.approved is True
-    assert rec.cmd_id == 42
+    recovered = IdempotencyStore(persist_path=persist_path, persist_enabled=True)
+    recovered.load()
+    record = recovered.check_or_reserve_typed("order-1")
+    assert record is not None
+    assert (record.approved, record.reason_code, record.cmd_id) == (False, "HALT", 42)
+    stale_extension.RustDedupStore.assert_not_called()
 
 
-def test_dedup_check_or_reserve_typed_hit_approved_false():
-    """check_or_reserve_typed() with Rust store returns approved=False when approved==0."""
+def test_typed_reservation_survives_restart_with_unknown_broker_outcome(tmp_path):
+    path = str(tmp_path / "dedup.jsonl")
+    store = IdempotencyStore(persist_enabled=True, persist_path=path)
+    assert store.check_or_reserve_typed("pending-order") is None
+    store.persist()
 
-    class _MockRust:
-        def check_or_reserve(self, key):
-            return (True, 0, "HALT", 0)
-
-    store = IdempotencyStore(window_size=100, persist_enabled=False)
-    store._rust_store = _MockRust()
-    rec = store.check_or_reserve_typed("some-key")
-    assert rec is not None
-    assert rec.approved is False
-
-
-def test_dedup_check_or_reserve_typed_hit_approved_none():
-    """check_or_reserve_typed() with Rust store returns approved=None for in-flight (approved not 0 or 1)."""
-
-    class _MockRust:
-        def check_or_reserve(self, key):
-            return (True, 2, "", 0)  # approved=2 → None
-
-    store = IdempotencyStore(window_size=100, persist_enabled=False)
-    store._rust_store = _MockRust()
-    rec = store.check_or_reserve_typed("in-flight")
-    assert rec is not None
-    assert rec.approved is None
-
-
-def test_dedup_check_or_reserve_typed_miss_returns_none():
-    """check_or_reserve_typed() with Rust store returns None on miss."""
-
-    class _MockRust:
-        def check_or_reserve(self, key):
-            return (False, 0, "", 0)
-
-    store = IdempotencyStore(window_size=100, persist_enabled=False)
-    store._rust_store = _MockRust()
-    rec = store.check_or_reserve_typed("new-key")
-    assert rec is None
+    recovered = IdempotencyStore(persist_enabled=True, persist_path=path)
+    recovered.load()
+    duplicate = recovered.check_or_reserve_typed("pending-order")
+    assert duplicate is not None
+    assert duplicate.approved is None
 
 
 def test_dedup_load_enforces_window_size():

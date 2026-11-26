@@ -54,8 +54,6 @@ x-hft-common: &hft-common
     - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
     - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
-    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
-    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
     # Pinned off, not a default: with the gateway on, RiskEngine.run() stops consuming
     # risk_queue, so the loss exit and the HALT re-queue write to a queue nobody reads,
     # and reduce-only/circuit breaker/rate limits (OrderAdapter.execute only) are bypassed.
@@ -169,6 +167,11 @@ services:
     <<: *hft-common
     container_name: hft-engine
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=engine HFT_RECORDER_MODE=${HFT_ENGINE_RECORDER_MODE:-wal_first} exec python -m hft_platform.main"]
+    # `docker stop` sends SIGKILL this long after SIGTERM (10 s if unset). The engine's own shutdown waits up to
+    # HFT_SHUTDOWN_GRACE_TIMEOUT_S (main.py, default 90 s), and the recorder flush inside it up to
+    # HFT_RECORDER_SHUTDOWN_TIMEOUT_S + 5 s (default 65 s). Keep this above the first by a few seconds; if you raise
+    # either variable in .env, raise this too. tests/unit/test_compose_engine_stop_grace_period.py checks the defaults.
+    stop_grace_period: 100s
     # Network mode handling
     # Removed default network_mode: ${HFT_NETWORK_MODE:-bridge} to allow proper DNS resolution
     # network_mode: ${HFT_NETWORK_MODE:-}
@@ -230,6 +233,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.12.3
     container_name: clickhouse
+    restart: unless-stopped
     environment:
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
@@ -406,6 +410,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: prometheus
+    restart: unless-stopped
     ports:
       - "127.0.0.1:9091:9090"
     volumes:
@@ -447,6 +452,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     container_name: alertmanager
+    restart: unless-stopped
     ports:
       - "127.0.0.1:9093:9093"
     volumes:

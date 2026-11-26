@@ -82,6 +82,12 @@ class SymbolBuildResult:
     symbols: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Option rules refused only for want of an underlying price (``ContractIndex.require_underlying``): each message
+    # is also in ``errors``, and its rule root (e.g. "TXO", "TXO_WEEKLY") is in ``unpriced_option_roots``.
+    unpriced_option_errors: list[str] = field(default_factory=list)
+    unpriced_option_roots: list[str] = field(default_factory=list)
+    # Option families (e.g. "TXO_WEEKLY") skipped with only a warning because nothing active is listed for them.
+    missing_option_roots: list[str] = field(default_factory=list)
 
     def ok(self) -> bool:
         return not self.errors
@@ -199,9 +205,9 @@ class ContractIndex:
     by_code: dict[str, dict[str, Any]] = field(default_factory=dict)
     futures_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     options_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    # Operator builds set this so an option window with no underlying price is an error instead of a
-    # median-strike guess. Runtime rebuilds (universe roll, contract refresh) leave it off: an error there
-    # would refuse the roll, so they keep the warning.
+    # Operator builds and QuoteConnectionPool._contract_index set this so an option window with no underlying
+    # price is an error instead of a median-strike guess (the universe roll then keeps the running universe).
+    # contracts_runtime's rebuild leaves it off: it writes partial symbols even on errors.
     require_underlying: bool = False
     # The earliest delivery date still trading (``taifex_delivery_cutoff``).
     # Runtime rebuilds set it so ``@front`` and ``validate_universe`` use one

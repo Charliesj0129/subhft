@@ -135,8 +135,8 @@ class RiskThresholds:
     # filter a timeout, so one sample no longer decides; a single slow order
     # still reaches WARM, which blocks nothing.
     order_rtt_storm_count: int = 3
-    order_rtt_storm_window_s: float = 60.0  # precision-time
-    order_rtt_storm_dwell_s: float = 300.0  # precision-time
+    order_rtt_storm_window_s: float = 60.0
+    order_rtt_storm_dwell_s: float = 300.0
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
@@ -429,7 +429,7 @@ class StormGuard:
             parsed["order_rtt_storm_count"] = max(1, int(risk_cfg["order_rtt_storm_count"]))
         for key in ("order_rtt_storm_window_s", "order_rtt_storm_dwell_s", "feed_gap_storm_s"):
             if key in risk_cfg:
-                parsed[key] = float(risk_cfg[key])  # precision-ok
+                parsed[key] = float(risk_cfg[key])
         with self._state_lock:
             for key, value in parsed.items():
                 setattr(self.thresholds, key, value)

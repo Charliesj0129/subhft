@@ -60,44 +60,6 @@ ScaledFee = NewType("ScaledFee", int)       # x10000
 | 20260330_001 | (alter market_data, orders, fills) | Multi-instrument: instrument_type, underlying, strike, option_right, expiry |
 | 20260401_001 | wal_dedup | WAL replay deduplication tracking |
 
-## Rust Boundary (rust_core via PyO3)
-
-### LOB + Normalization
-scale_book, scale_book_seq, scale_book_pair, scale_book_pair_stats, scale_book_pair_stats_np,
-compute_book_stats, get_field, normalize_tick_tuple, normalize_bidask_tuple,
-normalize_bidask_tuple_np, normalize_bidask_tuple_with_synth, normalize_tick_v2, normalize_bidask_v2
-
-### Event Routing
-EventBus, FastRingBuffer, FastTickRingBuffer, FastBidAskRingBuffer, FastLOBStatsRingBuffer,
-FastTypedRingBuffer (W4)
-
-### Feature Engine
-LobFeatureKernelV1, RustFeaturePipelineV1, RustFeatureEngineV2
-
-### Risk + Execution
-FastGate, RustRiskValidator, RustExposureStore, RustCircuitBreaker, RustStormGuardValidator,
-RustDedupStore, RustGatewayFusedCheck (W4)
-
-### Alpha Signals
-AlphaDepthSlope, AlphaOFI, AlphaRegimePressure, AlphaRegimeReversal,
-AlphaTransientReprice, AlphaMarkovTransition, MatchedFilterTradeFlow, MetaAlpha, AlphaStrategy
-
-### State + Position
-LimitOrderBook, RustBookState, RustPositionTracker, SymbolInternTable (W4)
-
-### Persistence
-RustColumnarBuffer, RustMetricsSampler, to_ch_price_scaled,
-map_tick_record, map_bidask_record, map_order_record, map_fill_record
-
-### IPC
-ShmRingBuffer, ShmSnapshotTable
-
-### Fused Pipelines (W4)
-RustNormalizerLobFused, RustNormalizerFeatureFusedV1
-
-### Utilities
-coerce_ns_int, coerce_ns_float, signals_to_positions, apply_latency_to_positions
-
 ## Persistence Topology
 
 ```

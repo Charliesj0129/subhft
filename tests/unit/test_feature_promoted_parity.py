@@ -1,4 +1,4 @@
-"""Promoted-family feature parity across Python / Rust / hftbacktest-shared paths.
+"""Promoted-family feature parity across Python / hftbacktest-shared paths.
 
 Guards Feature Plane Productionization: research / replay / live must produce the
 same feature schema, feature_ids, warmup/reset behavior, and promoted-family values
@@ -18,7 +18,6 @@ from hft_platform.feature.parity import (
     compare_paths,
     run_hftbacktest_shared,
     run_python_engine,
-    run_rust_engine,
     run_self_test,
 )
 from hft_platform.feature.registry import (
@@ -53,7 +52,6 @@ def test_promoted_family_is_minimal_microstructure_set(feature_set) -> None:
         "depth_imbalance_ema8_ppm",
     }
     assert ids == expected
-    # Promoted family must live within the v1 (first 16) indices the Rust kernel covers.
     assert max(promoted_indices(feature_set)) < 16
 
 
@@ -63,9 +61,6 @@ def test_promoted_family_schema_identical_across_paths(frames, feature_set) -> N
     assert len(py) == len(hb) > 0
     assert py[0].feature_ids == hb[0].feature_ids
     assert py[0].feature_ids == feature_set.feature_ids
-    rust = run_rust_engine(frames)
-    if rust is not None:
-        assert rust[0].feature_ids == py[0].feature_ids
 
 
 def test_python_hftbacktest_shared_parity_exact(frames, feature_set) -> None:
@@ -78,17 +73,6 @@ def test_python_hftbacktest_shared_parity_exact(frames, feature_set) -> None:
     assert report.n_frames > 0
 
 
-def test_python_rust_promoted_parity_within_tolerance(frames, feature_set) -> None:
-    rust = run_rust_engine(frames)
-    if rust is None:
-        pytest.skip("Rust extension not available")
-    report = compare_paths(
-        {"python": run_python_engine(frames), "rust": rust},
-        feature_set=feature_set,
-    )
-    report.raise_if_failed()
-
-
 def test_reset_rewarm_parity(frames) -> None:
     """warmup_ready_mask progression (incl. post-reset re-warm) matches across paths."""
     py = run_python_engine(frames)
@@ -98,9 +82,6 @@ def test_reset_rewarm_parity(frames) -> None:
     assert py_masks == hb_masks
     # The reset must visibly drop warmup readiness then climb back (not stuck full).
     assert min(py_masks) < max(py_masks)
-    rust = run_rust_engine(frames)
-    if rust is not None:
-        assert [f.warmup_ready_mask for f in rust] == py_masks
 
 
 def test_divergence_report_pinpoints_first_mismatch(frames, feature_set) -> None:

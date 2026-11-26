@@ -1,7 +1,7 @@
 # HFT Platform C4 Model (Current State)
 
 Date: 2026-02-21
-Scope: As-built architecture from `src/hft_platform`, `research`, `rust_core`, and `docker-compose.yml`.
+Scope: As-built architecture from `src/hft_platform`, `research`, and `docker-compose.yml`.
 Note: CE-M2 (GatewayService) and CE-M3 (WALFirstWriter, DiskPressureMonitor) are implemented as of 2026-02-21.
 
 ## 1. C1 - System Context
@@ -36,8 +36,6 @@ flowchart TB
     loader[WAL Loader\nsrc/hft_platform/recorder/loader.py]
     alpha[Alpha Governance Pipeline - Offline\nsrc/hft_platform/alpha/*\nvalidation, promotion, canary,\npool, experiments, audit]
     research[Research Toolchain\nresearch/registry\nresearch/backtest\nresearch/combinatorial\nresearch/rl]
-    rustcore[Rust Core Extension\nrust_core]
-    ruststrategy[Rust Strategy Extension\nrust\nnot wired into runtime path]
     monitor[Runtime Monitor Script\nscripts/monitor_runtime_health.py]
     wal[(WAL .wal/\nDiskPressureMonitor)]
     exp[(Research Experiments\nresearch/experiments/runs)]
@@ -53,7 +51,6 @@ flowchart TB
   alpha --> research
   research --> exp
   alpha --> promos
-  engine -->|hot path acceleration| rustcore
   engine --> shioaji
   engine -->|OrderIntent| gateway
   gateway -->|OrderCommand| engine
@@ -250,8 +247,6 @@ flowchart LR
     rl[research/rl/lifecycle.py]
   end
 
-  rustcore[rust_core/src/lib.rs]
-
   hftsystem --> bootstrap
   bootstrap --> md
   bootstrap --> strat
@@ -265,8 +260,6 @@ flowchart LR
   recorder -->|wal_first mode| walfirst
   walfirst --> diskmon
   walfirst --> recmode
-  md --> rustcore
-  bus --> rustcore
   strat --> gwchannel
   gwservice --> gwchannel
   gwservice --> gwexposure
@@ -369,10 +362,6 @@ Issue backlog: `.agent/library/cluster-evolution-backlog.md` § 3.
 - Research backtest: `research/backtest/hbt_runner.py`
 - Combinatorial search: `research/combinatorial/search_engine.py`
 - RL lifecycle: `research/rl/lifecycle.py`
-
-**Rust**:
-
-- Rust extension module: `rust_core/src/lib.rs`
 
 **Design reviews**:
 

@@ -17,7 +17,7 @@ from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
 from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 from hft_platform.execution.positions import PositionStore
-from hft_platform.execution.router import ExecutionRouter
+from hft_platform.execution.router import ExecutionRouter, fill_dedup_key
 
 
 def _make_orphaned_fill(
@@ -84,7 +84,7 @@ class TestRecoverFillGaps:
         """When order_id_map is empty (post-crash), checkpoint provides
         symbol→strategy mapping to resolve orphaned fills."""
         # Prepare checkpoint with TXFD6 → strat_maker mapping
-        import orjson
+        from hft_platform.utils import jsonfast
 
         ckpt_data = {
             "trading_date": "20260414",
@@ -101,14 +101,14 @@ class TestRecoverFillGaps:
                 },
             },
         }
-        body = orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS)
+        body = jsonfast.dumps_sorted(ckpt_data)
         import hashlib
 
         sha = hashlib.sha256(body).hexdigest()
         ckpt_data["sha256"] = sha
         ckpt_path = str(tmp_path / "checkpoint.json")
         with open(ckpt_path, "wb") as f:
-            f.write(orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS))
+            f.write(jsonfast.dumps_sorted(ckpt_data))
 
         # Seed DLQ with orphaned fill (unique fill_id to avoid dedup)
         dlq = get_orphaned_fill_dlq()
@@ -140,10 +140,10 @@ class TestRecoverFillGaps:
 
     @pytest.mark.asyncio
     async def test_dedup_skips_already_processed_fills(self, tmp_path):
-        """Fills whose fill_id is already in dedup window are skipped."""
+        """Fills whose dedup key is already in the dedup window are skipped."""
         import hashlib
 
-        import orjson
+        from hft_platform.utils import jsonfast
 
         ckpt_data = {
             "trading_date": "20260414",
@@ -160,20 +160,20 @@ class TestRecoverFillGaps:
                 },
             },
         }
-        body = orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS)
+        body = jsonfast.dumps_sorted(ckpt_data)
         sha = hashlib.sha256(body).hexdigest()
         ckpt_data["sha256"] = sha
         ckpt_path = str(tmp_path / "checkpoint.json")
         with open(ckpt_path, "wb") as f:
-            f.write(orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS))
+            f.write(jsonfast.dumps_sorted(ckpt_data))
 
         dlq = get_orphaned_fill_dlq()
         fill = _make_orphaned_fill(symbol="TXFD6", fill_id="ALREADY_SEEN")
         dlq.add(fill)
 
         router = _make_router()
-        # Pre-seed dedup window
-        router._seen_fill_ids["ALREADY_SEEN"] = None
+        # Pre-seed dedup window with the deal's key
+        router._seen_fill_ids[fill_dedup_key(fill)] = None
 
         result = await router.recover_fill_gaps(checkpoint_path=ckpt_path)
 

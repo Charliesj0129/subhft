@@ -1,11 +1,10 @@
 # HFT Platform Current Architecture Baseline
 
 Date: 2026-04-12
-Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
+Scope: As-built implementation under `src/hft_platform`, `research`, `config`, and `docker-compose.yml`.
 Companion target document: `.agent/library/target-architecture.md`.
 Companion C4 diagrams: `.agent/library/c4-model-current.md`.
 Companion research execution plan: `.agent/library/research_pipeline_execution_plan.md`.
-Companion Rust boundary note: `.agent/library/rust_pyo3.md`.
 Companion feature unification spec (implemented, production backlog open): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
 Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
@@ -25,7 +24,6 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 3. Shared acceleration and infra
 
-- Rust extension: `rust_core` (PyO3) consumed by runtime hot paths.
 - Storage/ops: ClickHouse, WAL, Prometheus/Grafana/Alertmanager, optional Redis.
 
 ## 2. Runtime Trading Planes
@@ -40,7 +38,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 - `src/hft_platform/feed_adapter/shioaji_client.py`: login, contracts, quote callbacks, watchdog, reconnect, API caches.
 - `src/hft_platform/services/market_data.py`: normalize payloads, update LOB, publish to bus, direct recorder mapping. Includes sliding window drop rate detector for `raw_queue` burst backpressure (added 2026-04-12).
-- `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events (Python/Rust paths).
+- `src/hft_platform/feed_adapter/normalizer.py`: raw payload -> normalized events using Python.
 - `src/hft_platform/feed_adapter/lob_engine.py`: per-symbol LOB + stats.
 - `src/hft_platform/feed_adapter/subscription_state.py`: feed subscription state management, round-robin slot assignment, subscription limit enforcement.
 - ✅ Implemented: `FeatureEngine` (Phase 18→v3) with 27 features across 3 schema versions (`lob_shared_v1`:16, `lob_shared_v2`:22, `lob_shared_v3`:27). Default set: `lob_shared_v3`. Enabled by default (`HFT_FEATURE_ENGINE_ENABLED=1`). See `docs/architecture/feature-engine-lob-research-unification-spec.md`.
@@ -56,7 +54,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `src/hft_platform/order/adapter.py`: API queue/coalescing, rate limits, circuit breaker, DLQ. Typed-intent identity and adapter rejection feedback added (2026-04-12).
 - `src/hft_platform/execution/gateway.py`: execution wrapper and liveness/error metrics.
 - `src/hft_platform/execution/router.py`: normalizes order/deal callbacks, updates position store, republishes events.
-- `src/hft_platform/execution/positions.py`: position accounting (Python + optional Rust tracker).
+- `src/hft_platform/execution/positions.py`: position accounting using scaled integers.
 - `src/hft_platform/execution/normalizer.py`: execution event field normalization (broker-agnostic).
 - `src/hft_platform/execution/reconciliation.py`: broker/local reconciliation, can trigger HALT.
 - `src/hft_platform/execution/startup_recon.py`: startup position recovery and cross-source reconciliation.
@@ -177,7 +175,7 @@ Status:
 - ✅ `FeatureEngine` runtime component and strategy pull APIs implemented (default-on rollout, 27 features in v3)
 - ✅ `HftBacktestAdapter` feature-first mode (`lob_feature`) implemented (L1 synthesized compatibility path)
 - ✅ Feature ABI/versioning/parity gates implemented; three schema versions (v1/v2/v3) with backward-compatible indices
-- ✅ v3 multi-window EMA aggregation (5s/30s/300s) + trade-signed toxicity feature; Rust transport and production kernel promotion remain backlog
+- ✅ v3 multi-window EMA aggregation (5s/30s/300s) + trade-signed toxicity feature
 
 ## 5. Module Inventory (Current)
 
@@ -207,25 +205,6 @@ Status:
 | `diagnostics`            | runtime diagnostics and troubleshooting                                                                         | `src/hft_platform/diagnostics/`                                                                                        |
 | `tca`                    | transaction cost analysis                                                                                       | `src/hft_platform/tca/`                                                                                                |
 | `backtest`               | runtime backtest runner/adapter/reporting with real-equity-first extraction                                     | `src/hft_platform/backtest/*.py`                                                                                       |
-
-## 6. Rust Boundary (Current)
-
-1. `rust_core` (PyO3, loaded as `hft_platform.rust_core` or `rust_core`)
-
-- `FastRingBuffer`, `EventBus`
-- book scaling/normalization helpers (`scale_book*`, `normalize_*`, `compute_book_stats`)
-- `RustPositionTracker`
-- `FastGate`
-- alpha classes and `AlphaStrategy`
-- shared memory ring buffer (`ShmRingBuffer`)
-
-2. Python call sites currently using Rust paths
-
-- `src/hft_platform/feed_adapter/normalizer.py`
-- `src/hft_platform/feed_adapter/lob_engine.py`
-- `src/hft_platform/engine/event_bus.py`
-- `src/hft_platform/execution/positions.py`
-- `src/hft_platform/strategies/rust_alpha.py`
 
 ## 7. Persistence Surfaces (Current)
 

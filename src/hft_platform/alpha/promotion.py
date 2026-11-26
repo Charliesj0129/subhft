@@ -16,7 +16,6 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import math
-import shlex
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -99,7 +98,7 @@ class PromotionConfig:
     min_cost_uncertainty_p95_lower_bound_pts: float = 0.0
     enable_rust_readiness_gate: bool = False
     rust_module_name: str | None = None
-    rust_parity_test_path: str = "tests/unit/test_rust_hotpath_parity.py"
+    rust_parity_test_path: str = ""
     rust_parity_timeout_s: int = 180
     enforce_rust_benchmark_gate: bool = False
     rust_benchmark_cmd: str = (
@@ -1023,86 +1022,10 @@ def _evaluate_gate_f(config: PromotionConfig, root: Path) -> tuple[bool, dict[st
             "checks": {},
         }
 
-    rust_module = str(config.rust_module_name or "").strip() or _load_rust_module_name(root, config.alpha_id)
-    checks: dict[str, dict[str, Any]] = {
-        "rust_module_declared": {
-            "value": rust_module or None,
-            "required": True,
-            "pass": bool(rust_module),
-        }
+    return False, {
+        "reason": "project_rust_support_removed",
+        "checks": {"rust_readiness_available": {"pass": False}},
     }
-    if not rust_module:
-        checks["rust_parity_tests"] = {
-            "pass": False,
-            "detail": "Skipped because rust_module is not declared in manifest",
-        }
-        if config.enforce_rust_benchmark_gate:
-            checks["rust_perf_regression_gate"] = {
-                "pass": False,
-                "detail": "Skipped because rust_module is not declared in manifest",
-            }
-        return False, {"checks": checks, "rust_module": None}
-
-    parity_path = Path(config.rust_parity_test_path)
-    if not parity_path.is_absolute():
-        parity_path = root / parity_path
-    parity_cmd = ["uv", "run", "pytest", "-q", "--no-cov", str(parity_path)]
-    try:
-        parity_proc = subprocess.run(
-            parity_cmd,
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=max(10, int(config.rust_parity_timeout_s)),
-            check=False,
-        )
-        checks["rust_parity_tests"] = {
-            "command": " ".join(parity_cmd),
-            "returncode": int(parity_proc.returncode),
-            "stdout_tail": parity_proc.stdout[-2000:],
-            "stderr_tail": parity_proc.stderr[-2000:],
-            "pass": parity_proc.returncode == 0,
-        }
-    except subprocess.TimeoutExpired as exc:
-        checks["rust_parity_tests"] = {
-            "command": " ".join(parity_cmd),
-            "returncode": 124,
-            "stdout_tail": (exc.stdout or "")[-2000:],
-            "stderr_tail": (exc.stderr or "")[-2000:],
-            "pass": False,
-            "detail": f"timeout after {int(config.rust_parity_timeout_s)}s",
-        }
-
-    if bool(config.enforce_rust_benchmark_gate):
-        bench_cmd = shlex.split(str(config.rust_benchmark_cmd))
-        try:
-            bench_proc = subprocess.run(
-                bench_cmd,
-                cwd=str(root),
-                capture_output=True,
-                text=True,
-                timeout=max(10, int(config.rust_parity_timeout_s)),
-                check=False,
-            )
-            checks["rust_perf_regression_gate"] = {
-                "command": " ".join(bench_cmd),
-                "returncode": int(bench_proc.returncode),
-                "stdout_tail": bench_proc.stdout[-2000:],
-                "stderr_tail": bench_proc.stderr[-2000:],
-                "pass": bench_proc.returncode == 0,
-            }
-        except subprocess.TimeoutExpired as exc:
-            checks["rust_perf_regression_gate"] = {
-                "command": " ".join(bench_cmd),
-                "returncode": 124,
-                "stdout_tail": (exc.stdout or "")[-2000:],
-                "stderr_tail": (exc.stderr or "")[-2000:],
-                "pass": False,
-                "detail": f"timeout after {int(config.rust_parity_timeout_s)}s",
-            }
-
-    passed = all(bool(v.get("pass", False)) for v in checks.values())
-    return passed, {"checks": checks, "rust_module": rust_module}
 
 
 def _build_paper_governance_report(
@@ -1215,21 +1138,6 @@ def _resolve_paper_trade_summary(
         return None, "tracker", f"paper_trade_summary_tracker_error:{exc}"
 
 
-def _load_rust_module_name(root: Path, alpha_id: str) -> str:
-    try:
-        from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
-
-        registry = AlphaDiscoveryRegistry()
-        loaded = registry.discover(str(root / "research" / "alphas"))
-        alpha = loaded.get(alpha_id)
-        if alpha is None:
-            return ""
-        rust_module = getattr(alpha.manifest, "rust_module", None)
-        return str(rust_module or "").strip()
-    except Exception as _exc:  # noqa: BLE001
-        return ""
-
-
 def build_promotion_checklist(
     config: PromotionConfig,
     gate_d_checks: dict[str, Any],
@@ -1237,7 +1145,6 @@ def build_promotion_checklist(
     gate_f_checks: dict[str, Any] | None = None,
 ) -> PromotionChecklist:
     gate_e_map = gate_e_checks.get("checks", gate_e_checks)
-    gate_f_map = (gate_f_checks or {}).get("checks", gate_f_checks or {})
 
     sharpe = gate_d_checks.get("sharpe_oos", {})
     drawdown = gate_d_checks.get("max_drawdown", {})
@@ -1342,32 +1249,14 @@ def build_promotion_checklist(
                 detail=str((gate_f_checks or {}).get("reason", "")),
             )
         )
-    elif bool(config.enable_rust_readiness_gate):
-        rust_module = gate_f_map.get("rust_module_declared", {})
-        rust_parity = gate_f_map.get("rust_parity_tests", {})
-        items.extend(
-            [
-                PromotionChecklistItem(
-                    label="Gate F: Rust module declared in manifest",
-                    passed=bool(rust_module.get("pass", False)),
-                    detail=f"rust_module={rust_module.get('value')}",
-                ),
-                PromotionChecklistItem(
-                    label="Gate F: Rust parity tests pass",
-                    passed=bool(rust_parity.get("pass", False)),
-                    detail=f"returncode={rust_parity.get('returncode')}",
-                ),
-            ]
-        )
-        if bool(config.enforce_rust_benchmark_gate):
-            rust_bench = gate_f_map.get("rust_perf_regression_gate", {})
-            items.append(
-                PromotionChecklistItem(
-                    label="Gate F: Rust performance regression gate pass",
-                    passed=bool(rust_bench.get("pass", False)),
-                    detail=f"returncode={rust_bench.get('returncode')}",
-                )
+    elif config.enable_rust_readiness_gate:
+        items.append(
+            PromotionChecklistItem(
+                label="Gate F: Rust readiness unavailable",
+                passed=False,
+                detail=str((gate_f_checks or {}).get("reason", "")),
             )
+        )
     return PromotionChecklist(items=items)
 
 

@@ -243,4 +243,7 @@ def test_bootstrap_schedules_the_warmup_for_a_client_that_supports_it() -> None:
     """The clock is useless unless something runs it on the engine loop."""
     source = Path("src/hft_platform/services/bootstrap.py").read_text(encoding="utf-8")
     assert 'hasattr(order_client, "warm_order_session")' in source
-    assert "OrderSessionWarmup(order_client).run()" in source
+    assert "order_session_warmup = OrderSessionWarmup(order_client)" in source
+    assert "deferred_tasks.append(order_session_warmup.run())" in source
+    # HFTSystem reads it from the registry to attach the relogin hook.
+    assert "order_session_warmup=order_session_warmup" in source

@@ -4,7 +4,8 @@ Verifies:
 1. Hash uses full 64-char SHA-256 (not truncated)
 2. Hash is deterministic across calls with the same data
 3. Hash uses sorted keys for dict ordering consistency
-4. Fallback to json.dumps works when orjson unavailable
+4. The hash does not depend on orjson being importable (msgspec encodes the rows)
+5. Rows msgspec refuses still hash, through the stdlib json fallback
 """
 
 import hashlib
@@ -80,34 +81,49 @@ def test_different_data_produces_different_hash():
     assert hash_a != hash_b
 
 
-def test_hash_fallback_when_orjson_unavailable():
-    """When orjson is not importable, the json fallback must still produce a
-    full-length, deterministic, key-sorted SHA-256 hash.
+def test_hash_is_the_sha256_of_compact_sorted_json_and_ignores_orjson_availability():
+    """The free-threaded build has no orjson wheel. The hash is stored in ClickHouse, so it
+    must be the same value whether or not orjson can be imported: SHA-256 over the rows'
+    compact, key-sorted JSON, concatenated.
     """
+    rows = [{"b": 2, "a": 1}, {"x": 99}]
+    expected_hash = hashlib.sha256(b'{"a":1,"b":2}{"x":99}').hexdigest()
+
+    baseline_hash = _compute_hash_via_insert_with_dedup(rows)
+    with patch.dict(sys.modules, {"orjson": None}):
+        blocked_hash = _compute_hash_via_insert_with_dedup(rows)
+
+    assert baseline_hash == expected_hash
+    assert blocked_hash == expected_hash
+
+
+class _Odd:
+    """A value the JSON encoder refuses but ``str()`` can describe."""
+
+    def __str__(self) -> str:
+        return "odd"
+
+
+def test_hash_falls_back_to_stdlib_json_for_rows_the_encoder_refuses():
+    """A row with an unserializable value must still hash: stdlib json, sorted keys, default=str."""
     import json
 
-    rows = [{"b": 2, "a": 1}, {"x": 99}]
-
-    # Compute expected hash manually using the fallback path
+    rows = [{"b": _Odd(), "a": 1}, {"x": 99}]
     raw = "".join(json.dumps(r, sort_keys=True, default=str) for r in rows).encode()
-    expected_hash = hashlib.sha256(raw).hexdigest()
 
-    # Block orjson import inside the module under test
-    with patch.dict(sys.modules, {"orjson": None}):
-        result_hash = _compute_hash_via_insert_with_dedup(rows)
+    result_hash = _compute_hash_via_insert_with_dedup(rows)
 
-    assert result_hash == expected_hash, f"Fallback hash mismatch: {result_hash!r} != {expected_hash!r}"
+    assert result_hash == hashlib.sha256(raw).hexdigest()
     assert len(result_hash) == 64
 
 
 def test_hash_fallback_sorted_keys_consistency():
-    """Fallback path must also produce consistent hashes regardless of key order."""
-    rows_a = [{"z": 3, "a": 1, "m": 2}]
-    rows_b = [{"a": 1, "m": 2, "z": 3}]
+    """The stdlib fallback must also produce the same hash regardless of key order."""
+    rows_a = [{"z": _Odd(), "a": 1, "m": 2}]
+    rows_b = [{"a": 1, "m": 2, "z": _Odd()}]
 
-    with patch.dict(sys.modules, {"orjson": None}):
-        hash_a = _compute_hash_via_insert_with_dedup(rows_a)
-        hash_b = _compute_hash_via_insert_with_dedup(rows_b)
+    hash_a = _compute_hash_via_insert_with_dedup(rows_a)
+    hash_b = _compute_hash_via_insert_with_dedup(rows_b)
 
     assert hash_a == hash_b, f"Fallback key ordering should not affect hash: {hash_a!r} != {hash_b!r}"
 
