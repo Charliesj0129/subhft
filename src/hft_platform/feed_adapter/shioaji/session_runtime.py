@@ -20,6 +20,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
     release_login_slot,
     scrub_broker_error,
 )
+from hft_platform.feed_adapter.shioaji.ops_checks import check_ca_expiry
 
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
@@ -402,6 +403,10 @@ class SessionRuntime:
                             except Exception as exc:
                                 c._record_api_latency("activate_ca", start_ns, ok=False)
                                 logger.error("CA activation failed", error=scrub_broker_error(exc))
+                        # Read-only: the CA's expiry date, for the days-to-expiry gauge and the 30-day warning. Asked
+                        # even when activation just failed, since an expired certificate is one reason it would. Bounded
+                        # by a timeout and never raises, so it cannot fail or hold up this login.
+                        check_ca_expiry(c, pid)
                     c.logged_in = True
                     c._last_session_refresh_ts = timebase.now_s()
                     c._release_session_lock()

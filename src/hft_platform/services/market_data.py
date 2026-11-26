@@ -1379,7 +1379,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
             self._set_state(FeedState.CONNECTED)
 
         except Exception as e:
-            logger.error("Connect failed", error=str(e))
+            logger.error("Connect failed", error=str(e), error_type=type(e).__name__)
             self._set_state(FeedState.DISCONNECTED)
 
     # -- broker callback -----------------------------------------------------

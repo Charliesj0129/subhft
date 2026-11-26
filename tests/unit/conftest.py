@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -277,3 +279,19 @@ def normalizer():
         norm = MarketDataNormalizer.__new__(MarketDataNormalizer)
         norm.metrics = None
         yield norm
+
+
+@pytest.fixture(autouse=True)
+def _reset_fubon_connection_slots() -> Iterator[None]:
+    """Clear the process-wide futopt connection count around each test.
+
+    A runtime that a test never stops keeps its slot, so one test's leftovers would count against
+    the next test's cap.  Only a module some test already imported can hold slots.
+    """
+    quote_runtime = sys.modules.get("hft_platform.feed_adapter.fubon.quote_runtime")
+    if quote_runtime is not None:
+        quote_runtime._reset_connection_slots()
+    yield
+    quote_runtime = sys.modules.get("hft_platform.feed_adapter.fubon.quote_runtime")
+    if quote_runtime is not None:
+        quote_runtime._reset_connection_slots()

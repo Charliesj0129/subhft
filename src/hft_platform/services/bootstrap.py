@@ -17,6 +17,7 @@ from hft_platform.core import timebase
 from hft_platform.core.background_tasks import spawn_retained
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.execution.field_map import get_field_map
 from hft_platform.execution.gateway import ExecutionGateway
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
@@ -675,7 +676,7 @@ class SystemBootstrapper:
             from hft_platform.feed_adapter.fubon.facade import FubonClientFacade  # lazy import
 
             logger.info("Instantiating Fubon broker clients", broker_id=broker_id)
-            fubon_md_client = FubonClientFacade(symbols_path, base_shioaji_cfg)
+            fubon_md_client = FubonClientFacade(symbols_path, quote_cfg)
             if order_mode == "disabled":
                 return fubon_md_client, _RoleGuardedNoopClient("order_disabled")
             return fubon_md_client, FubonClientFacade(symbols_path, order_cfg)
@@ -1104,6 +1105,9 @@ class SystemBootstrapper:
             # not a value: the broker session is not authenticated yet here and
             # get_default_account_id() would answer "".
             default_account_id_provider=getattr(order_client, "get_default_account_id", None),
+            # broker_id was validated by _resolve_broker_id above (unknown names raise there), so the
+            # selected broker's report keys reach the normalizer instead of the Shioaji default.
+            field_map=get_field_map(broker_id),
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator
@@ -1673,6 +1677,13 @@ class SystemBootstrapper:
 
             order_session_warmup = OrderSessionWarmup(order_client)
             deferred_tasks.append(order_session_warmup.run())
+
+        # Read-only telemetry on the order session: has the SDK seen a gap in order/deal reports? The probe runs in a
+        # worker thread once a minute and takes no action; a client without it (Fubon, the no-op client) is skipped.
+        if hasattr(order_client, "check_trade_cache_health"):
+            from hft_platform.ops.trade_cache_health_watch import run_trade_cache_health_watch
+
+            deferred_tasks.append(run_trade_cache_health_watch(order_client))
 
         # The Alertmanager -> Telegram bridge runs in hft-bot since 2026-11-13, so
         # alerts (HFTEngineDown above all) survive an engine stop. Alertmanager's

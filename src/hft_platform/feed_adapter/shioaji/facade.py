@@ -8,6 +8,7 @@ from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 from hft_platform.feed_adapter.shioaji.historical_gateway import HistoricalGateway
 from hft_platform.feed_adapter.shioaji.market_info_gateway import MarketInfoGateway
+from hft_platform.feed_adapter.shioaji.ops_checks import TradeCacheHealthCheck
 from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
 from hft_platform.feed_adapter.shioaji.scanner_gateway import ScannerGateway
 
@@ -32,6 +33,7 @@ class ShioajiClientFacade:
         "scanner_gateway",
         "market_info_gateway",
         "subscription_manager",
+        "_trade_cache_health_check",
     )
 
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None) -> None:
@@ -49,6 +51,7 @@ class ShioajiClientFacade:
         self.scanner_gateway = ScannerGateway(client)
         self.market_info_gateway = MarketInfoGateway(client)
         self.subscription_manager = client._subscription_manager
+        self._trade_cache_health_check = TradeCacheHealthCheck(client)
         # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
         client._quote_event_handler = self.quote_runtime._event_handler
@@ -125,6 +128,14 @@ class ShioajiClientFacade:
     def warm_order_session(self) -> bool:
         """Establish the order connection's transport session ahead of an open."""
         return self.order_gateway.warm_session()
+
+    def check_trade_cache_health(self) -> str | None:
+        """Read-only probe of the SDK's trade-cache health; blocking, so call it from a worker thread.
+
+        Publishes the answer as metrics and returns the state label (``healthy``, ``unknown``, ``degraded``,
+        ``check_failed``, ``unavailable``), or None when there was no session or account to ask. Takes no action.
+        """
+        return self._trade_cache_health_check.run_once().state
 
     def get_exchange(self, symbol: str) -> str:
         return self._client.get_exchange(symbol) or ""

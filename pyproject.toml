@@ -59,7 +59,7 @@ research = [
 
 [project.optional-dependencies]
 shioaji-broker = ["shioaji[speed]==1.7.11"]  # Shioaji (SinoPac) broker SDK
-fubon = ["fubon-neo>=2.2.7"]  # Fubon broker SDK (not on PyPI; install from Fubon's index)
+fubon = ["fubon-neo==2.5.0"]  # Fubon broker SDK (on PyPI since 2.3.1)
 monitor = ["rich>=13.0"]  # Signal monitor TUI (rich.live + rich.table)
 bot = ["python-telegram-bot[job-queue]>=21.0"]  # Telegram Bot interactive service
 
@@ -258,7 +258,3 @@ conflicts = [
     [{ extra = "shioaji-broker" }, { extra = "fubon" }],
 ]
 
-# fubon-neo is not on PyPI (distributed via Fubon's private index).
-# Override it to an empty constraint so the lockfile resolver succeeds.
-# Users install fubon-neo manually: pip install fubon-neo>=2.2.7
-override-dependencies = ["fubon-neo>=0.0.0; python_version == '0'"]

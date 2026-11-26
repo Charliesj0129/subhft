@@ -1,29 +1,68 @@
 """Fubon order execution gateway.
 
-Wraps Fubon SDK (fubon_neo) order placement, cancellation, and modification.
-All prices are received as scaled int (x10000) and unscaled at the SDK boundary.
+Wraps the Fubon SDK (fubon_neo 2.5.0) futures/options order API: placement,
+cancellation, price and lot modification.  All prices are received as scaled int
+(x10000) and turned into the decimal *string* the SDK expects by integer
+arithmetic at this boundary (no float, no Decimal).
+
+Real shapes (introspected from the 2.5.0 wheel)::
+
+    sdk.futopt.place_order(account, FutOptOrder, unblock=None)   -> Result
+    sdk.futopt.cancel_order(account, order_res, unblock=None)    -> Result
+    sdk.futopt.make_modify_price_obj(order_res, price=None, price_type=None)
+    sdk.futopt.modify_price(account, modify_price_obj, unblock=None)
+    sdk.futopt.make_modify_lot_obj(order_res, lot)
+    sdk.futopt.modify_lot(account, modify_lot_obj, unblock=None)
+    sdk.futopt.get_order_results(account, market_type=None)
+
+``Result`` is ``(is_success, message, data)`` and ``data`` is a
+``FutOptOrderResult``; a failed envelope raises here and is never returned as if
+it were an order.  Cancel and modify act on a ``FutOptOrderResult`` (what
+``place_order`` returns); a bare order number is resolved through
+``get_order_results`` first.
 """
 
 from __future__ import annotations
 
 import time
-from decimal import Decimal
+from dataclasses import dataclass
 from typing import Any
 
 from structlog import get_logger
 
-from hft_platform.feed_adapter.fubon.order_codec import FubonOrderCodec
+from hft_platform.feed_adapter.fubon.order_codec import (
+    FubonOrderAlreadyFilledError,
+    FubonOrderCodec,
+    encode_user_def,
+    format_scaled_price,
+    unwrap_sdk_result,
+)
 
 logger = get_logger("feed_adapter.fubon.order_gateway")
 
 PRICE_SCALE = 10000
-_PRICE_SCALE_D = Decimal(PRICE_SCALE)
+
+# Price types that carry a limit price; the others must be sent without one.
+_PRICED_TYPES = frozenset({"LMT"})
+
+
+@dataclass(frozen=True, slots=True)
+class FubonCancelNoOp:
+    """What ``cancel_order`` returns when there was nothing left to cancel.
+
+    The broker refused the cancel because the order is already filled.  That is the
+    ordinary loser of a cancel-versus-fill race, not a failed cancel: nothing was sent
+    that could be retried, and the fill report settles the order.
+    """
+
+    order_id: str
+    reason: str
 
 
 class FubonOrderGateway:
-    """Fubon order execution gateway."""
+    """Fubon futures/options order execution gateway."""
 
-    __slots__ = ("_sdk", "_client", "_codec", "log")
+    __slots__ = ("_sdk", "_client", "_codec", "_account", "log")
 
     def __init__(
         self,
@@ -31,197 +70,184 @@ class FubonOrderGateway:
         codec: FubonOrderCodec | None = None,
         *,
         client: Any | None = None,
+        account: Any | None = None,
     ) -> None:
         if sdk is None:
             sdk = client
         self._sdk = sdk
         self._client = sdk
         self._codec = codec or FubonOrderCodec()
+        self._account = account
         self.log = logger
+
+    def set_account(self, account: Any) -> None:
+        """Bind the trading account returned by login (every futopt call needs it)."""
+        self._account = account
 
     def _require_sdk(self, op: str) -> Any:
         if self._sdk is None:
             raise NotImplementedError(f"FubonOrderGateway.{op} not yet implemented")
         return self._sdk
 
+    def _require_account(self, op: str) -> Any:
+        if self._account is None:
+            raise RuntimeError(f"FubonOrderGateway.{op}: no trading account (login has not completed)")
+        return self._account
+
     def place_order(
         self,
         symbol: str | None = None,
         price: int | None = None,
         qty: int | None = None,
-        side: str | None = None,
-        tif: str = "ROD",
+        side: Any = None,
+        tif: Any = "ROD",
         price_type: str = "LMT",
-        order_type: str = "Stock",
+        order_type: str = "Auto",
+        *,
+        market_type: str = "Future",
+        user_def: str | None = None,
     ) -> Any:
-        """Place order via Fubon SDK.
+        """Place a futures/options order via ``sdk.futopt.place_order``.
 
         Args:
-            symbol: Instrument symbol (e.g. "2330").
-            price: Price as scaled int (x10000).
-            qty: Order quantity.
-            side: "Buy" or "Sell".
-            tif: Time-in-force: "ROD", "IOC", "FOK".
-            price_type: "LMT" or "MKT".
-            order_type: "Stock", "DayTrade", or "Margin".
+            symbol: Contract symbol as the exchange lists it (e.g. ``"TMFK6"``).
+            price: Limit price as scaled int (x10000); ignored for non-limit types.
+            qty: Order quantity in lots.
+            side: ``"Buy"``/``"Sell"`` or the platform ``Side`` enum.
+            tif: ``"ROD"``, ``"IOC"``, ``"FOK"`` or the platform ``TIF`` enum.
+            price_type: ``"LMT"``, ``"MKT"`` or ``"MKP"``.
+            order_type: ``"Auto"``, ``"New"``, ``"Close"`` or ``"FdayTrade"``.
+            market_type: ``"Future"``, ``"FutureNight"``, ``"Option"`` or ``"OptionNight"``.
+                The caller picks the session; nothing here guesses it.
+            user_def: Optional tag echoed on reports (1-10 ASCII letters/digits).
 
         Returns:
-            SDK order result.
+            The SDK ``FutOptOrderResult``.
+
+        Raises:
+            ValueError: an argument is invalid (nothing is sent to the SDK).
+            FubonSdkResultError: the SDK reported failure.
         """
         sdk = self._require_sdk("place_order")
-        if symbol is None or price is None or qty is None or side is None:
-            raise TypeError("symbol, price, qty, and side are required")
-        sdk_price = float(Decimal(price) / _PRICE_SCALE_D)
-        bs_action = self._codec.encode_side(side)
-        time_in_force = self._codec.encode_tif(tif)
-        pt = self._codec.encode_price_type(price_type)
-        ot = self._codec.encode_order_type(order_type)
+        account = self._require_account("place_order")
+        if symbol is None or qty is None or side is None:
+            raise TypeError("symbol, qty, and side are required")
+        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
+            raise ValueError(f"qty must be a positive int, got {qty!r}")
+        priced = price_type in _PRICED_TYPES
+        if priced and (price is None or isinstance(price, bool) or not isinstance(price, int) or price <= 0):
+            raise ValueError(f"{price_type} order needs a positive scaled-int price, got {price!r}")
+        sdk_price = format_scaled_price(price) if priced else None
+        order = self._codec.build_futopt_order(
+            market_type=self._codec.encode_futopt_market_type(market_type),
+            price_type=self._codec.encode_futopt_price_type(price_type),
+            time_in_force=self._codec.encode_tif(tif),
+            order_type=self._codec.encode_futopt_order_type(order_type),
+            buy_sell=self._codec.encode_side(side),
+            symbol=symbol,
+            lot=qty,
+            price=sdk_price,
+            user_def=encode_user_def(user_def),
+        )
 
         start_ns = time.perf_counter_ns()
         try:
-            result = sdk.stock.place_order(
-                buy_sell=bs_action,
-                symbol=symbol,
-                price=sdk_price,
-                quantity=qty,
-                price_type=pt,
-                time_in_force=time_in_force,
-                order_type=ot,
-            )
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
+            data = unwrap_sdk_result(sdk.futopt.place_order(account, order), "place_order")
             self.log.info(
                 "fubon_place_order",
                 symbol=symbol,
-                side=side,
+                side=str(side),
                 price_scaled=price,
                 qty=qty,
-                elapsed_us=elapsed_us,
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
             )
-            return result
+            return data
         except Exception as exc:
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
             self.log.error(
                 "fubon_place_order_failed",
                 symbol=symbol,
-                side=side,
+                side=str(side),
                 error=str(exc),
-                elapsed_us=elapsed_us,
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
             )
             raise
 
-    def place_futopt_order(
-        self,
-        symbol: str | None = None,
-        price: int | None = None,
-        qty: int | None = None,
-        side: str | None = None,
-        tif: str = "ROD",
-        price_type: str = "LMT",
-    ) -> Any:
-        """Place futures/options order via Fubon SDK.
+    def place_futopt_order(self, *args: Any, **kwargs: Any) -> Any:
+        """Alias of :meth:`place_order` (futures/options is the only order path)."""
+        return self.place_order(*args, **kwargs)
 
-        Args:
-            symbol: Futures/options symbol.
-            price: Price as scaled int (x10000).
-            qty: Order quantity.
-            side: "Buy" or "Sell".
-            tif: Time-in-force: "ROD", "IOC", "FOK".
-            price_type: "LMT" or "MKT".
+    def _resolve_order_result(self, trade: Any, op: str) -> Any:
+        """Return the ``FutOptOrderResult`` the SDK needs for cancel/modify.
 
-        Returns:
-            SDK order result.
-        """
-        sdk = self._require_sdk("place_futopt_order")
-        if symbol is None or price is None or qty is None or side is None:
-            raise TypeError("symbol, price, qty, and side are required")
-        sdk_price = float(Decimal(price) / _PRICE_SCALE_D)
-        bs_action = self._codec.encode_side(side)
-        time_in_force = self._codec.encode_tif(tif)
-        pt = self._codec.encode_price_type(price_type)
-
-        start_ns = time.perf_counter_ns()
-        try:
-            result = sdk.futopt.place_order(
-                buy_sell=bs_action,
-                symbol=symbol,
-                price=sdk_price,
-                quantity=qty,
-                price_type=pt,
-                time_in_force=time_in_force,
-            )
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
-            self.log.info(
-                "fubon_place_futopt_order",
-                symbol=symbol,
-                side=side,
-                price_scaled=price,
-                qty=qty,
-                elapsed_us=elapsed_us,
-            )
-            return result
-        except Exception as exc:
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
-            self.log.error(
-                "fubon_place_futopt_order_failed",
-                symbol=symbol,
-                side=side,
-                error=str(exc),
-                elapsed_us=elapsed_us,
-            )
-            raise
-
-    @staticmethod
-    def _extract_order_id(trade: Any, op: str) -> str:
-        """Extract order_id from a trade object or raw string.
-
-        Args:
-            trade: Either a string order_id or an object with an ``order_id`` attribute.
-            op: Operation name for error messages.
-
-        Returns:
-            The resolved order_id string.
+        Accepts the object ``place_order`` returned (has ``order_no``/``seq_no``) as is.
+        A bare order-number string, or an object that only has ``order_id``, is
+        looked up in today's order results.
 
         Raises:
-            TypeError: If order_id cannot be resolved.
+            TypeError: *trade* carries no order identity.
+            ValueError: the order number is not among today's order results.
         """
-        if isinstance(trade, str):
+        if not isinstance(trade, str) and (
+            getattr(trade, "order_no", None) is not None or getattr(trade, "seq_no", None) is not None
+        ):
             return trade
-        order_id = getattr(trade, "order_id", None)
-        if order_id is None:
-            raise TypeError(f"{op}: cannot extract order_id from trade (type={type(trade).__name__})")
-        return order_id
+        order_id = trade if isinstance(trade, str) else getattr(trade, "order_id", None)
+        if order_id is None or not str(order_id).strip():
+            raise TypeError(f"{op}: cannot extract an order identity from trade (type={type(trade).__name__})")
+        order_id = str(order_id)
+        results = unwrap_sdk_result(
+            self._require_sdk(op).futopt.get_order_results(self._require_account(op)),
+            "get_order_results",
+        )
+        for candidate in results or ():
+            if str(getattr(candidate, "order_no", "")) == order_id or str(getattr(candidate, "seq_no", "")) == order_id:
+                return candidate
+        raise ValueError(f"{op}: order {order_id} is not among today's order results")
 
     def cancel_order(self, trade: Any) -> Any:
-        """Cancel an existing order.
-
-        Accepts either a raw ``order_id`` string (backward compat) or a trade
-        object with an ``order_id`` attribute (BrokerProtocol compatible).
+        """Cancel an existing order via ``sdk.futopt.cancel_order``.
 
         Args:
-            trade: A string order_id or trade object with ``order_id`` attribute.
+            trade: What ``place_order`` returned (a ``FutOptOrderResult``), or an
+                order number string.
 
         Returns:
-            SDK cancellation result.
+            The SDK ``FutOptOrderResult`` of the cancellation, or a
+            :class:`FubonCancelNoOp` (``reason="already_filled"``) when the broker
+            refused because the order is already filled.
+
+        Raises:
+            FubonSdkResultError: the SDK refused the cancel of a live order, or failed.
         """
-        order_id = self._extract_order_id(trade, "cancel_order")
         sdk = self._require_sdk("cancel_order")
+        account = self._require_account("cancel_order")
+        order_res = self._resolve_order_result(trade, "cancel_order")
+        order_id = str(getattr(order_res, "order_no", ""))
         start_ns = time.perf_counter_ns()
         try:
-            result = sdk.stock.cancel_order(order_id=order_id)
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
+            data = unwrap_sdk_result(sdk.futopt.cancel_order(account, order_res), "cancel_order")
             self.log.info(
                 "fubon_cancel_order",
                 order_id=order_id,
-                elapsed_us=elapsed_us,
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
             )
-            return result
+            return data
+        except FubonOrderAlreadyFilledError as exc:
+            # Returned, not raised: the caller counts a raised cancel as a broker failure
+            # (circuit-breaker input), and losing a cancel-versus-fill race is not one.
+            self.log.info(
+                "fubon_cancel_order_already_filled",
+                order_id=order_id,
+                error=str(exc),
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
+            )
+            return FubonCancelNoOp(order_id=order_id, reason="already_filled")
         except Exception as exc:
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
             self.log.error(
                 "fubon_cancel_order_failed",
                 order_id=order_id,
                 error=str(exc),
-                elapsed_us=elapsed_us,
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
             )
             raise
 
@@ -231,56 +257,65 @@ class FubonOrderGateway:
         price: int | None = None,
         qty: int | None = None,
     ) -> Any:
-        """Modify an existing order's price and/or quantity.
+        """Modify an existing order's price and/or lot.
 
-        Accepts either a raw ``order_id`` string (backward compat) or a trade
-        object with an ``order_id`` attribute (BrokerProtocol compatible).
+        Price goes through ``make_modify_price_obj`` + ``modify_price``; lot through
+        ``make_modify_lot_obj`` + ``modify_lot``.  With both, the price change runs
+        first and the lot change acts on its result; if the second step fails the
+        first stays applied (the exception says which step failed).
 
         Args:
-            trade: A string order_id or trade object with ``order_id`` attribute.
-            price: New price as scaled int (x10000).
-            qty: New quantity.
+            trade: What ``place_order`` returned, or an order number string.
+            price: New limit price as scaled int (x10000).
+            qty: New lot, passed to the SDK as its ``lot`` argument unchanged.
 
         Returns:
-            SDK modification result, or None if no changes requested.
+            The SDK ``FutOptOrderResult`` of the last step, or None when neither
+            ``price`` nor ``qty`` was given.
         """
         if price is None and qty is None:
             self.log.warning("update_order: no price or qty provided, no-op")
             return None
-        order_id = self._extract_order_id(trade, "update_order")
         sdk = self._require_sdk("update_order")
-        sdk_price = float(Decimal(price) / _PRICE_SCALE_D) if price is not None else None
-        modify_kwargs: dict[str, Any] = {"order_id": order_id}
-        if sdk_price is not None:
-            modify_kwargs["price"] = sdk_price
-        if qty is not None:
-            modify_kwargs["quantity"] = qty
+        account = self._require_account("update_order")
+        if price is not None and (isinstance(price, bool) or not isinstance(price, int) or price <= 0):
+            raise ValueError(f"price must be a positive scaled int, got {price!r}")
+        if qty is not None and (isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0):
+            raise ValueError(f"qty must be a positive int, got {qty!r}")
+        order_res = self._resolve_order_result(trade, "update_order")
+        order_id = str(getattr(order_res, "order_no", ""))
+        step = "modify_price"
         start_ns = time.perf_counter_ns()
         try:
-            result = sdk.stock.modify_order(**modify_kwargs)
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
+            if price is not None:
+                price_obj = sdk.futopt.make_modify_price_obj(order_res, format_scaled_price(price))
+                order_res = unwrap_sdk_result(sdk.futopt.modify_price(account, price_obj), step)
+            if qty is not None:
+                step = "modify_lot"
+                lot_obj = sdk.futopt.make_modify_lot_obj(order_res, qty)
+                order_res = unwrap_sdk_result(sdk.futopt.modify_lot(account, lot_obj), step)
             self.log.info(
                 "fubon_update_order",
                 order_id=order_id,
                 price_scaled=price,
                 qty=qty,
-                elapsed_us=elapsed_us,
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
             )
-            return result
+            return order_res
         except Exception as exc:
-            elapsed_us = (time.perf_counter_ns() - start_ns) / 1000
             self.log.error(
                 "fubon_update_order_failed",
                 order_id=order_id,
+                step=step,
                 error=str(exc),
-                elapsed_us=elapsed_us,
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
             )
             raise
 
     def batch_place_orders(self, orders: list[dict[str, Any]]) -> list[Any]:
         """Place multiple orders sequentially with per-order error isolation.
 
-        Fubon SDK has no native batch API, so orders are placed one at a time
+        Fubon SDK has no native batch API here, so orders are placed one at a time
         with rate-limit-aware delays (67ms = 1/15s between orders).
 
         Args:
@@ -288,7 +323,8 @@ class FubonOrderGateway:
                 symbol (str), price (int, scaled x10000), qty (int),
                 side (str), tif (str, default "ROD"),
                 price_type (str, default "LMT"),
-                order_type (str, default "Stock").
+                order_type (str, default "Auto"),
+                market_type (str, default "Future"), user_def (optional).
 
         Returns:
             List of SDK results (or None for failed orders).
@@ -313,7 +349,9 @@ class FubonOrderGateway:
                     side=order.get("side"),
                     tif=order.get("tif", "ROD"),
                     price_type=order.get("price_type", "LMT"),
-                    order_type=order.get("order_type", "Stock"),
+                    order_type=order.get("order_type", "Auto"),
+                    market_type=order.get("market_type", "Future"),
+                    user_def=order.get("user_def"),
                 )
                 results.append(result)
                 successes += 1
