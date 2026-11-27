@@ -803,10 +803,10 @@ class MarketDataNormalizer:
     def _maybe_synthesize_side(
         self,
         symbol: str,
-        bids: list | Any,
-        asks: list | Any,
+        bids: Any,
+        asks: Any,
         scale: int,
-    ) -> tuple[list | Any, list | Any, bool]:
+    ) -> tuple[Any, Any, bool]:
         if not _SYNTHETIC_SIDE:
             return bids, asks, False
 
@@ -972,7 +972,7 @@ class MarketDataNormalizer:
             bids, asks, _ = self._maybe_synthesize_side(symbol, bids, asks, scale)
 
             if len(bids) and len(asks):
-                best_bid, best_ask = int(bids[0][0]), int(asks[0][0])
+                best_bid, best_ask = bids.item(0), asks.item(0)
                 if best_bid > 0 and best_ask > 0:
                     self._trade_classifier.update_quotes(symbol, best_bid, best_ask)
 

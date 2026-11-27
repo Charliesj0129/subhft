@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 from structlog import get_logger
 
 from hft_platform.core.timebase import now_ns as _now_ns
@@ -22,6 +23,13 @@ def _safe_int_round(val: float, default: int = 0) -> int:
     if not math.isfinite(val):
         return default
     return int(round(val))
+
+
+def _l2_l5_qty(levels: np.ndarray, n_levels: int) -> tuple[float, float, float, float]:
+    """Return the level 2-5 quantities of an int64 (N, 2) book side, 0.0 for absent levels."""
+    qty = levels[1:n_levels, 1].tolist()
+    qty += [0] * (4 - len(qty))
+    return float(qty[0]), float(qty[1]), float(qty[2]), float(qty[3])
 
 
 class _StatsTupleProxy:
@@ -979,7 +987,10 @@ class FeatureEngine:
         if event is not None:
             bids = getattr(event, "bids", None)
             asks = getattr(event, "asks", None)
-            if bids is not None:
+            if isinstance(bids, np.ndarray) and bids.ndim == 2 and bids.shape[1] > 1:
+                n_bid_levels = min(len(bids), 5)
+                cb2, cb3, cb4, cb5 = _l2_l5_qty(bids, n_bid_levels)
+            elif bids is not None:
                 try:
                     n_bid_levels = min(len(bids), 5)
                     if n_bid_levels > 1:
@@ -996,7 +1007,10 @@ class FeatureEngine:
                     # corrupted depth shows up in metrics.
                     self._l5_clear_error_count += 1
                     self._log_l5_clear_error("bid", _exc)
-            if asks is not None:
+            if isinstance(asks, np.ndarray) and asks.ndim == 2 and asks.shape[1] > 1:
+                n_ask_levels = min(len(asks), 5)
+                ca2, ca3, ca4, ca5 = _l2_l5_qty(asks, n_ask_levels)
+            elif asks is not None:
                 try:
                     n_ask_levels = min(len(asks), 5)
                     if n_ask_levels > 1:

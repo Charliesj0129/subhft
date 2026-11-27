@@ -4,6 +4,8 @@ import os
 from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
+import numpy as np
+
 from hft_platform.contracts.execution import FillEvent, OrderEvent
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.events import BidAskEvent, TickEvent
@@ -65,14 +67,14 @@ def _to_ch_price_scaled(
     """Convert internal/native price directly to CH scaled price when possible."""
     if isinstance(value, bool):
         return _to_scaled_int(float(value))
-    if isinstance(value, int):
+    if isinstance(value, (int, np.integer)):
         try:
             scale = int(metadata.price_scale(symbol))
         except Exception as _exc:  # noqa: BLE001
             scale = 0
         if scale > 0:
             # Internal normalized events often carry scaled ints; convert directly.
-            return int(round((value * CLICKHOUSE_PRICE_SCALE) / scale))
+            return int(round((int(value) * CLICKHOUSE_PRICE_SCALE) / scale))
     descaled = _descale(symbol, value, metadata, price_codec)
     return _to_scaled_int(descaled)
 
