@@ -8,8 +8,10 @@ event modes, and synthetic side generation.
 
 from __future__ import annotations
 
+import gc
 from unittest.mock import patch
 
+import numpy as np
 import yaml
 
 from hft_platform.events import BidAskEvent, TickEvent
@@ -399,8 +401,46 @@ class TestNormalizeBidAsk:
         }
         result = norm.normalize_bidask(payload)
         assert isinstance(result, BidAskEvent)
-        assert result.bids == [[1000000, 10]]
-        assert result.asks == [[1010000, 15]]
+        assert result.bids.tolist() == [[1000000, 10]]
+        assert result.asks.tolist() == [[1010000, 15]]
+
+    def test_normalize_bidask_levels_untracked_by_gc_when_book_has_levels(self, tmp_path, monkeypatch):
+        """Bidask levels are int64 (N, 2) arrays the cyclic GC does not track."""
+        norm = _make_normalizer(tmp_path)
+        payload = {
+            "code": "2330",
+            "ts": 0,
+            "bid_price": [100.0, 99.5, 0.0],
+            "bid_volume": [10, 20, 30],
+            "ask_price": [100.5, 101.0],
+            "ask_volume": [15, 25],
+        }
+        result = norm.normalize_bidask(payload)
+        assert isinstance(result, BidAskEvent)
+        for levels in (result.bids, result.asks):
+            assert isinstance(levels, np.ndarray)
+            assert levels.dtype == np.int64
+            assert levels.ndim == 2 and levels.shape[1] == 2
+            assert gc.is_tracked(levels) is False
+        assert result.bids.tolist() == [[1000000, 10], [995000, 20]]
+        assert result.asks.tolist() == [[1005000, 15], [1010000, 25]]
+
+    def test_normalize_bidask_levels_empty_side_is_zero_row_array(self, tmp_path, monkeypatch):
+        """A side with no positive level is a (0, 2) int64 array, not a list."""
+        norm = _make_normalizer(tmp_path)
+        payload = {
+            "code": "2330",
+            "ts": 0,
+            "bid_price": [0.0],
+            "bid_volume": [5],
+            "ask_price": [101.0],
+            "ask_volume": [15],
+        }
+        result = norm.normalize_bidask(payload)
+        assert isinstance(result, BidAskEvent)
+        assert isinstance(result.bids, np.ndarray)
+        assert result.bids.shape == (0, 2)
+        assert result.bids.dtype == np.int64
 
     def test_missing_symbol_returns_none(self, tmp_path, monkeypatch):
         """No symbol in payload => None."""

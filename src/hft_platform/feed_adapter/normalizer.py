@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any, cast
 
+import numpy as np
 from structlog import get_logger
 
 from hft_platform.core import timebase
@@ -566,12 +567,13 @@ def _extract_ts_ns(ts_val: Any) -> int:
 
 
 def _scale_book_levels(prices, volumes, scale):
-    levels = []
+    flat = []
     for raw_price, volume in zip(prices, volumes):
         price = float(raw_price)
         if price > 0:
-            levels.append([int(round(price * scale)), int(volume)])
-    return levels
+            flat.append(int(round(price * scale)))
+            flat.append(int(volume))
+    return np.array(flat, dtype=np.int64).reshape(-1, 2)
 
 
 def _event_contract_kw(event_cls: type, metadata: "SymbolMetadata | None", symbol: str) -> dict[str, Any]:
@@ -844,12 +846,12 @@ class MarketDataNormalizer:
         if not has_bids and has_asks:
             best_ask = _best_price(asks)
             bid_price = max(best_ask - (tick_int * _SYNTHETIC_TICKS), 1)
-            bids = [[bid_price, 1]]
+            bids = np.array([[bid_price, 1]], dtype=np.int64)
             synthesized = True
         elif not has_asks and has_bids:
             best_bid = _best_price(bids)
             ask_price = max(best_bid + (tick_int * _SYNTHETIC_TICKS), 1)
-            asks = [[ask_price, 1]]
+            asks = np.array([[ask_price, 1]], dtype=np.int64)
             synthesized = True
 
         return bids, asks, synthesized
@@ -969,8 +971,8 @@ class MarketDataNormalizer:
             asks = _scale_book_levels(ap, av, scale)
             bids, asks, _ = self._maybe_synthesize_side(symbol, bids, asks, scale)
 
-            if bids and asks:
-                best_bid, best_ask = bids[0][0], asks[0][0]
+            if len(bids) and len(asks):
+                best_bid, best_ask = int(bids[0][0]), int(asks[0][0])
                 if best_bid > 0 and best_ask > 0:
                     self._trade_classifier.update_quotes(symbol, best_bid, best_ask)
 
