@@ -17,7 +17,7 @@ Based on 2026-03-02 exploration data (8-day docker stats, WAL inventory, schema 
 | CK `audit.*` (6 tables) | ~2–5 GB | ~24–60 GB | ✅ 2-year TTL (added 2026-03-02) | LOW |
 | CK `hft.backtest_runs` | ~1–3 GB | ~12–36 GB | ✅ 90-day TTL (added 2026-03-02) | LOW |
 | WAL archive (`.wal/archive/`) | ~25 GB | **~300 GB** | ⚠️ Weekly cron (see cron-setup-remote.md) | MEDIUM |
-| `research/data/` (experiment data) | ~44 GB | **~528 GB** | ✅ 4-tier rotation cron (scripts/research_data_rotate.sh) | MEDIUM |
+| `research/data/` (experiment data) | ~44 GB | **~528 GB** | ⚠️ 4-tier rotation cron (scripts/research_data_rotate.sh); deletes by directory age, see data-retention-policy.md "Known divergences" | MEDIUM |
 | CK system logs | ~0 GB | ~0 GB | ✅ TTL 3–7 days (config/clickhouse_system_logs.xml) | LOW |
 | Docker build cache | ~2 GB | ~24 GB | ⚠️ Monthly cron prune | MEDIUM |
 | Prometheus TSDB | ~0.5 GB | ~6 GB | ✅ 30-day retention (updated 2026-03-02) | LOW |
@@ -58,7 +58,9 @@ free after the 2026-03-02 cleanup). Research data remains the largest uncontroll
 - **Cause**: `research/data/` holds NumPy datasets from every experiment; no rotation policy
 - **Mitigation**: Establish a 90-day manual review cycle; archive to cold storage or delete
   old experiment data. See `docs/operations/data-retention-policy.md` for details.
-- **Status**: ✅ Done — automated 4-tier rotation (2026-03-27)
+- **Status**: ⚠️ Automated 4-tier rotation exists (2026-03-27), but its deletion criteria diverge from the
+  policy (Tier 2 ignores alpha status, Tier 4 deletes immutable experiment runs); see
+  `docs/operations/data-retention-policy.md` "Known divergences"
 
 ### R05 — Disk Alerts Without Data Source (no node_exporter)
 - **Severity**: HIGH
