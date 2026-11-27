@@ -987,7 +987,7 @@ class FeatureEngine:
         if event is not None:
             bids = getattr(event, "bids", None)
             asks = getattr(event, "asks", None)
-            if isinstance(bids, np.ndarray) and bids.ndim == 2 and bids.shape[1] > 1:
+            if isinstance(bids, np.ndarray) and bids.ndim == 2 and bids.shape[1] > 1 and bids.dtype.kind in "iu":
                 n_bid_levels = min(len(bids), 5)
                 cb2, cb3, cb4, cb5 = _l2_l5_qty(bids, n_bid_levels)
             elif bids is not None:
@@ -1007,7 +1007,7 @@ class FeatureEngine:
                     # corrupted depth shows up in metrics.
                     self._l5_clear_error_count += 1
                     self._log_l5_clear_error("bid", _exc)
-            if isinstance(asks, np.ndarray) and asks.ndim == 2 and asks.shape[1] > 1:
+            if isinstance(asks, np.ndarray) and asks.ndim == 2 and asks.shape[1] > 1 and asks.dtype.kind in "iu":
                 n_ask_levels = min(len(asks), 5)
                 ca2, ca3, ca4, ca5 = _l2_l5_qty(asks, n_ask_levels)
             elif asks is not None:

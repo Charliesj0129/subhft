@@ -257,6 +257,19 @@ def test_mldm_ndarray_levels_match_list_levels_when_depth_changes() -> None:
     assert engine_np.get_feature_tuple("TEST")[20] != 0
 
 
+def test_mldm_object_dtype_levels_count_l5_clear_error_instead_of_raising() -> None:
+    """A malformed object-dtype ndarray side takes the guarded path and is counted, not raised."""
+    engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
+    bad = BidAskEvent(
+        meta=MetaData(source_ts=1000, local_ts=1000, seq=0),
+        symbol="TEST",
+        bids=np.array([[100_0000, None], [99_0000, None], [98_0000, 4]], dtype=object),
+        asks=np.array([[101_0000, 50], [102_0000, 30]], dtype=np.int64),
+    )
+    engine.process_lob_update(bad, _make_stats("TEST", 100_0000, 101_0000, 50, 50))
+    assert engine._l5_clear_error_count == 1
+
+
 # --- Feature access ---
 
 
