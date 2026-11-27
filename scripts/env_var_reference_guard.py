@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import json
 import re
@@ -14,6 +15,22 @@ STATUS_FAIL = "fail"
 
 HFT_VAR_PATTERN = re.compile(r"\bHFT_[A-Z0-9_]+\b")
 RUNBOOK_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(\.\./runbooks(?:[^)]*)\)")
+VAR_EXACT_PATTERN = re.compile(r"^HFT_[A-Z0-9_]+$")
+REFERENCE_ROW_PATTERN = re.compile(r"^\|\s*`(HFT_[A-Z0-9_]+)`\s*\|\s*([^|]*)\|")
+# Where a variable can be wired without a Python reader in src/ (text scan, no parsing).
+READER_GLOBS = (
+    "scripts/**/*.py",
+    "scripts/**/*.sh",
+    "rust_core/src/**/*.rs",
+    "docker-compose*.yml",
+    "Dockerfile*",
+    "config/**/*.yaml",
+    "config/**/*.yml",
+    ".github/workflows/*.yml",
+    "Makefile",
+)
+NO_DEFAULT_CELLS = {"", "-", "—", "–", "n/a", "unset", "(unset)", "none", "無"}
+DIRECTION_LIST_LIMIT = 15
 
 
 def _now_iso() -> str:
@@ -70,6 +87,16 @@ def _write_markdown(path: Path, payload: dict[str, Any]) -> None:
     else:
         lines.append("- none")
 
+    directions = payload.get("directions") or {}
+    for key, rows in directions.items():
+        lines.append("")
+        lines.append(f"## {key} ({len(rows)})")
+        lines.append("")
+        for row in rows or ["none"]:
+            lines.append(
+                f"- `{row}`" if isinstance(row, str) else f"- `{json.dumps(row, ensure_ascii=False, sort_keys=True)}`"
+            )
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -92,9 +119,151 @@ def _extract_hft_vars(text: str) -> set[str]:
     return set(HFT_VAR_PATTERN.findall(text))
 
 
-def _evaluate_reference_guard(
-    project_root: Path, reference_doc: Path, runbook_files: list[Path]
+# --------------------------------------------------------------------------------- both directions (report)
+
+
+def _normalize_default(value: Any) -> str | None:
+    """A comparable form of a default: numbers by value, booleans/yes/no as 1/0, empty as None."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return str(int(number)) if number.is_integer() else repr(number)
+    text = str(value).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"true", "yes", "on"}:
+        return "1"
+    if lowered in {"false", "no", "off"}:
+        return "0"
+    try:
+        return _normalize_default(float(text))
+    except ValueError:
+        return text
+
+
+def _literal_default(call: ast.Call) -> Any:
+    """The literal default of ``f("HFT_X", <literal>)`` / ``f("HFT_X", default=<literal>)``, else a sentinel."""
+    candidates = list(call.args[1:2]) + [kw.value for kw in call.keywords if kw.arg == "default"]
+    for node in candidates:
+        if isinstance(node, ast.Constant):
+            return node.value
+    return _NO_LITERAL
+
+
+_NO_LITERAL = object()
+
+
+def scan_code_vars(project_root: Path) -> dict[str, dict[str, Any]]:
+    """``{var: {"sites": ["file:line", ...], "defaults": {normalized, ...}}}`` from string literals in ``src/``.
+
+    A variable counts when the exact string ``"HFT_X"`` appears (this also sees reads wrapped in helpers such as
+    ``_env_int("HFT_X", 5)``); a default counts when a call passes a literal right after it.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for py in sorted((project_root / "src").rglob("*.py")):
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        rel = str(py.relative_to(project_root))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and VAR_EXACT_PATTERN.match(node.value):
+                entry = found.setdefault(node.value, {"sites": [], "defaults": set()})
+                entry["sites"].append(f"{rel}:{node.lineno}")
+            elif isinstance(node, ast.Call) and node.args:
+                first = node.args[0]
+                if (
+                    isinstance(first, ast.Constant)
+                    and isinstance(first.value, str)
+                    and VAR_EXACT_PATTERN.match(first.value)
+                ):
+                    default = _literal_default(node)
+                    if default is not _NO_LITERAL and _normalize_default(default) is not None:
+                        found.setdefault(first.value, {"sites": [], "defaults": set()})["defaults"].add(
+                            _normalize_default(default)
+                        )
+    return found
+
+
+def scan_other_readers(project_root: Path) -> set[str]:
+    """HFT_* names mentioned in scripts, Rust, compose, Dockerfiles, config and workflows (wired without src/)."""
+    names: set[str] = set()
+    for pattern in READER_GLOBS:
+        for path in project_root.glob(pattern):
+            if path.is_file():
+                names |= _extract_hft_vars(path.read_text(encoding="utf-8", errors="replace"))
+    return names
+
+
+def parse_reference_defaults(reference_text: str) -> dict[str, str | None]:
+    """``{var: normalized default}`` for rows ``| `HFT_X` | `default` | ... |``; None when no comparable default."""
+    out: dict[str, str | None] = {}
+    for line in reference_text.splitlines():
+        m = REFERENCE_ROW_PATTERN.match(line)
+        if not m:
+            continue
+        cell = m.group(2).strip().strip("`").strip()
+        comparable = (
+            cell.lower() not in NO_DEFAULT_CELLS
+            and len(cell) <= 40
+            and re.fullmatch(r"[^\s,\x00-\x1f\x7f-\U0010ffff]+", cell)
+        )
+        out.setdefault(m.group(1), _normalize_default(cell) if comparable else None)
+    return out
+
+
+def evaluate_directions(
+    project_root: Path, reference_text: str, code_vars: dict[str, dict[str, Any]], other_readers: set[str]
 ) -> dict[str, Any]:
+    """Compare the reference with the code in both directions. Report only: nothing here changes the exit code."""
+    reference_defaults = parse_reference_defaults(reference_text)
+    reference_vars = _extract_hft_vars(reference_text)
+    code_names = set(code_vars)
+
+    undocumented = [
+        {"var": var, "sites": code_vars[var]["sites"][:3]}
+        for var in sorted(code_names - reference_vars)
+        if not var.endswith("_")
+    ]
+    unread = sorted(v for v in reference_vars - code_names - other_readers if not v.endswith("_"))
+    mismatches = []
+    multiple = []
+    for var in sorted(code_names):
+        defaults = sorted(code_vars[var]["defaults"])
+        if len(defaults) > 1:
+            multiple.append({"var": var, "defaults": defaults})
+        documented = reference_defaults.get(var)
+        if documented is not None and defaults and documented not in defaults:
+            mismatches.append({"var": var, "documented": documented, "code": defaults})
+    return {
+        "undocumented_code_vars": undocumented,
+        "unread_reference_vars": unread,
+        "default_mismatches": mismatches,
+        "multiple_code_defaults": multiple,
+    }
+
+
+def _print_directions(directions: dict[str, Any]) -> None:
+    labels = {
+        "undocumented_code_vars": "read in src/ but not in the reference",
+        "unread_reference_vars": "in the reference but not in src/, scripts, Rust, compose or config",
+        "default_mismatches": "reference default differs from the literal default in code",
+        "multiple_code_defaults": "code gives more than one default",
+    }
+    for key, label in labels.items():
+        rows = directions[key]
+        print(f"[env-vars-guard] {key}={len(rows)} ({label})")
+        for row in rows[:DIRECTION_LIST_LIMIT]:
+            print("  -", row if isinstance(row, str) else json.dumps(row, ensure_ascii=False, sort_keys=True))
+        if len(rows) > DIRECTION_LIST_LIMIT:
+            print(f"  ... {len(rows) - DIRECTION_LIST_LIMIT} more in the JSON report")
+
+
+def _evaluate_reference_guard(project_root: Path, reference_doc: Path, runbook_files: list[Path]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
     def add(
@@ -230,6 +399,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output directory for JSON/Markdown artifacts.",
     )
     parser.add_argument(
+        "--strict-directions",
+        action="store_true",
+        help="Fail (exit 2) when the code/reference comparison finds anything. Report-only by default.",
+    )
+    parser.add_argument(
         "--allow-warn-exit-zero",
         action="store_true",
         help="Return 0 when result is warn.",
@@ -247,6 +421,11 @@ def main(argv: list[str] | None = None) -> int:
     runbook_files = _glob_files(project_root, runbook_globs)
 
     payload = _evaluate_reference_guard(project_root, reference_doc, runbook_files)
+    reference_text = reference_doc.read_text(encoding="utf-8") if reference_doc.exists() else ""
+    directions = evaluate_directions(
+        project_root, reference_text, scan_code_vars(project_root), scan_other_readers(project_root)
+    )
+    payload["directions"] = directions
     stamp = _stamp()
     output_dir = (project_root / args.output_dir).resolve()
     json_path = output_dir / "checks" / f"env_vars_guard_{stamp}.json"
@@ -263,9 +442,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     if payload["missing_vars"]:
         print("[env-vars-guard] missing:", ", ".join(payload["missing_vars"]))
+    _print_directions(directions)
     print("[env-vars-guard] report:", json_path.relative_to(project_root))
 
     overall = payload["overall"]
+    if args.strict_directions and any(directions[key] for key in directions):
+        return 2
     if overall == STATUS_FAIL:
         return 2
     if overall == STATUS_WARN and not args.allow_warn_exit_zero:
