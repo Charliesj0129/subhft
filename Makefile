@@ -350,6 +350,16 @@ post-market-check: ## Run post-market health checks (WAL, recorder, ClickHouse r
 alert-test: ## Send test alert to alertmanager and verify delivery
 	$(PY) scripts/alert_test.py
 
+# promtool is not installed on the host or the CI runner; run it from the image docker-compose.yml runs.
+PROMTOOL_IMAGE ?= prom/prometheus:v2.55.1
+# Every rule file config/monitoring/prometheus.yml loads (tests/unit/test_alert_rules_test_yaml.py keeps the two lists equal).
+ALERT_RULE_FILES := config/monitoring/alerts/rules.yaml config/monitoring/alerts/replay_parity_alert.yml config/monitoring/alerts/slo_recording_rules.yaml
+
+.PHONY: alert-rules-test
+alert-rules-test: ## Run promtool check rules and test rules on config/monitoring/alerts in Docker (Prometheus v2.55.1)
+	docker run --rm --entrypoint promtool -v "$(CURDIR):/w:ro" -w /w $(PROMTOOL_IMAGE) check rules $(ALERT_RULE_FILES)
+	docker run --rm --entrypoint promtool -v "$(CURDIR):/w:ro" -w /w $(PROMTOOL_IMAGE) test rules config/monitoring/alerts/rules_test.yaml
+
 drill-recon-mismatch: ## Run reconciliation mismatch drill (integration test)
 	uv run pytest tests/integration/test_recon_mismatch_drill.py -v --no-cov
 

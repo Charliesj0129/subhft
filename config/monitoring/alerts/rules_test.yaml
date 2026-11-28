@@ -1,9 +1,16 @@
 # promtool unit tests for the trading-liveness rules added 2026-08-08.
 #
-# Run:  docker run --rm --entrypoint promtool \
-#         -v "$PWD/config/monitoring/alerts:/rules:ro" prom/prometheus:v2.51.0 \
-#         test rules /rules/rules_test.yaml
-# (v2.51.0 is the version docker-compose.yml runs.)
+# Run:  make alert-rules-test   (also the `alert-rules` job of .github/workflows/ci.yml)
+#       which is, for this file:
+#         docker run --rm --entrypoint promtool -v "$PWD:/w:ro" -w /w \
+#           prom/prometheus:v2.55.1 test rules config/monitoring/alerts/rules_test.yaml
+# (v2.55.1 is the version docker-compose.yml runs.)
+#
+# Cost: promtool evaluates every rule of rule_files at every evaluation_interval step up to the
+# largest eval_time of each group, so a group costs (largest eval_time / evaluation_interval) x the
+# rules loaded, whatever its series hold. The groups with horizons of 12 h to 85 h (universe roll,
+# contract cache, backup) are that long because the rules they pin compare time() with 12 h, 30 h
+# and 3.5 days: promtool's clock starts at 0, so a shorter horizon cannot reach the threshold.
 #
 # These fixtures encode the actual production state that 83 armed alert rules
 # failed to describe: R47 bound to an expired expiry, deciding "flat" on every
@@ -361,11 +368,11 @@ tests:
   # THESHOW 2026-11-02: the boot roll failed on a partial contract cache and
   # the pool ran on config/symbols.yaml all night. Positive controls are that
   # shape; negative controls are a roll that keeps validating.
-  - interval: 10m
+  - interval: 1m
     name: universe-roll-not-validating fires when no rebuild ever passed
     input_series:
       - series: "hft_quote_pool_universe_last_valid_timestamp_seconds"
-        values: "0x80"
+        values: "0x800"
     alert_rule_test:
       - eval_time: 700m
         alertname: UniverseRollNotValidating
@@ -385,11 +392,13 @@ tests:
                 universe_roll_build_failed / universe_roll_refused log lines.
               runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
-  - interval: 10m
+  - interval: 1m
     name: universe-roll-not-validating stays quiet while the roll validates every 10m
     input_series:
+      # One sample per minute: a 10m step leaves gaps longer than the 5m lookback,
+      # and an absent series resets the for: timer, so the test proved nothing.
       - series: "hft_quote_pool_universe_last_valid_timestamp_seconds"
-        values: "0+600x80"
+        values: "0+60x800"
     alert_rule_test:
       - eval_time: 790m
         alertname: UniverseRollNotValidating
@@ -451,6 +460,18 @@ tests:
         exp_alerts: []
       - eval_time: 35m
         alertname: UniverseOnLastGoodFallback
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The quote pool booted from the last-good universe; its own roll failed"
+              description: |
+                The boot roll failed and the pool started from
+                data/universe_last_good.yaml (validated against its recorded delivery
+                dates). That is safe until the next settlement; it clears once a
+                rebuild validates and is adopted or matches. Read
+                universe_boot_on_last_good (`reason`) in the engine log.
+              runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
   # ── Front-month invariant ───────────────────────────────────────
   - interval: 1m
@@ -549,14 +570,6 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
-              summary: "The quote pool booted from the last-good universe; its own roll failed"
-              description: |
-                The boot roll failed and the pool started from
-                data/universe_last_good.yaml (validated against its recorded delivery
-                dates). That is safe until the next settlement; it clears once a
-                rebuild validates and is adopted or matches. Read
-                universe_boot_on_last_good (`reason`) in the engine log.
-
               summary: "The front-month watch has not run for over 10 minutes"
               description: >-
                 front_month_check_timestamp_seconds stopped advancing, so
