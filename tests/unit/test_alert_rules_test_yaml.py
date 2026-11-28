@@ -196,3 +196,34 @@ def test_annotation_guard_reports_text_drift_and_a_missing_key() -> None:
     assert _annotation_key_problems(test_doc, alerts) == [
         "#0 g: A expects ['description', 'summary'], rule has ['description', 'runbook_url', 'summary']"
     ]
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROMETHEUS_CONFIG_PATH = REPO_ROOT / "config" / "monitoring" / "prometheus.yml"
+MAKEFILE_PATH = REPO_ROOT / "Makefile"
+
+
+def _prometheus_rule_file_names(config_text: str) -> set[str]:
+    config = yaml.safe_load(config_text)
+    return {Path(entry).name for entry in config.get("rule_files", [])}
+
+
+def _makefile_promtool_rule_file_names(makefile_text: str) -> set[str]:
+    for line in makefile_text.splitlines():
+        name, sep, value = line.partition(":=")
+        if sep and name.strip() == "ALERT_RULE_FILES":
+            return {Path(item).name for item in value.split()}
+    return set()
+
+
+def test_promtool_check_covers_every_rule_file_prometheus_loads() -> None:
+    loaded = _prometheus_rule_file_names(PROMETHEUS_CONFIG_PATH.read_text(encoding="utf-8"))
+    checked = _makefile_promtool_rule_file_names(MAKEFILE_PATH.read_text(encoding="utf-8"))
+    assert loaded, "prometheus.yml lists no rule_files"
+    assert checked == loaded, f"promtool checks {sorted(checked)}, Prometheus loads {sorted(loaded)}"
+
+
+def test_promtool_coverage_guard_reports_a_rule_file_left_out() -> None:
+    config_text = "rule_files:\n  - /etc/prometheus/alerts/rules.yaml\n  - /etc/prometheus/alerts/extra.yml\n"
+    makefile_text = "ALERT_RULE_FILES := config/monitoring/alerts/rules.yaml\n"
+    assert _prometheus_rule_file_names(config_text) - _makefile_promtool_rule_file_names(makefile_text) == {"extra.yml"}
