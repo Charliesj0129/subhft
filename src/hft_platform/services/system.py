@@ -2362,16 +2362,22 @@ class HFTSystem:
                 ),
             )
 
-        # Periodic gen-0 GC: collect short-lived cyclic refs even when full GC is disabled.
-        # Gen-0 is typically <1ms and safe to run at supervisor frequency.
-        _gc_gen0_interval = max(1, int(os.getenv("HFT_GC_GEN0_INTERVAL_TICKS", "10")))
+        # Drain young objects every tick: batching ten seconds of allocations
+        # creates a larger indivisible pause. Explicit overrides stay supported.
+        _gc_gen0_interval = max(1, int(os.getenv("HFT_GC_GEN0_INTERVAL_TICKS", "1")))
         _gc_gen0_tick = 0
-        _gc_gen0_enabled = os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {
+        _gc_enabled = os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
-        } and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {"0", "false", "no", "off"}
+        }
+        _gc_gen0_enabled = _gc_enabled and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         # Periodic gen-2 GC: reclaim long-lived cyclic refs (structlog, asyncio internals).
         #
         # The default used to be 300 ticks (~5 min), justified by "typically
@@ -2384,13 +2390,19 @@ class HFTSystem:
         # excursions above 50 ms per hour — so this is the largest identified
         # contributor to the tail, roughly two thirds of it, not all of it.
         #
-        # ``gc.collect()`` holds the GIL, so this cannot be moved to an executor;
-        # frequency is the only lever that does not change what gets reclaimed.
-        # Hourly still yields 24 collections a day, which is ample for the
-        # gen-1/gen-2 accumulation this exists to bound under ``gc.disable()``.
+        # ``gc.collect()`` holds the GIL, so an executor cannot remove the stall.
+        # Retain full old-generation reclamation even if young GC is switched
+        # off. Do not freeze the mutable startup graph: orphaned frozen cycles
+        # would survive these hourly collections forever. Re-freezing runtime
+        # survivors would progressively hide more cycles; unfreezing restores
+        # the full-heap pause. Gen1 cannot replace a full collection either.
         _gc_gen2_interval = max(60, int(os.getenv("HFT_GC_GEN2_INTERVAL_TICKS", "3600")))
         _gc_gen2_tick = 0
-        _gc_gen2_enabled = _gc_gen0_enabled  # same gate as gen-0
+        _gc_histograms = (
+            {generation: metrics.pipeline_latency_ns.labels(stage=f"gc_gen{generation}") for generation in (0, 2)}
+            if _gc_enabled
+            else {}
+        )  # Bind children at zero before the loop; no series is created by a collection.
 
         while self.running:
             await asyncio.sleep(interval_s)  # 1Hz Tick
@@ -2873,28 +2885,31 @@ class HFTSystem:
                 self._halt_checkpoint_written = False
                 self._halt_episode_start_mono = None
 
-            # Periodic gen-0 GC: reclaim cyclic refs from framework objects
-            # (structlog, Prometheus, asyncio internals) without full GC pause.
+            # At most one collection per tick: gen2 already includes gen0/1.
+            # Never stack a young scan immediately before a full scan.
+            _gc_generation = -1
+            if _gc_enabled:
+                _gc_gen2_tick += 1
+                if _gc_gen2_tick >= _gc_gen2_interval:
+                    _gc_gen2_tick = 0
+                    _gc_generation = 2
             if _gc_gen0_enabled:
                 _gc_gen0_tick += 1
                 if _gc_gen0_tick >= _gc_gen0_interval:
                     _gc_gen0_tick = 0
-                    gc.collect(0)
-            # Periodic gen-2 GC: reclaim long-lived cyclic refs that gen-0 cannot reach.
-            # Without this, 24/7 operation with gc.disable() leaks gen-1/gen-2 objects.
-            if _gc_gen2_enabled:
-                _gc_gen2_tick += 1
-                if _gc_gen2_tick >= _gc_gen2_interval:
-                    _gc_gen2_tick = 0
-                    _gc2_start = loop.time()
-                    _gc2_collected = gc.collect(2)
-                    _gc2_ms = (loop.time() - _gc2_start) * 1000.0
-                    if _gc2_ms > 5.0 or _gc2_collected > 100:
-                        logger.info(
-                            "gc_gen2_periodic",
-                            collected=_gc2_collected,
-                            duration_ms=round(_gc2_ms, 2),
-                        )
+                    if _gc_generation != 2:
+                        _gc_generation = 0
+            if _gc_generation >= 0:
+                _gc_start_ns = time.perf_counter_ns()
+                _gc_collected = gc.collect(_gc_generation)
+                _gc_duration_ns = time.perf_counter_ns() - _gc_start_ns
+                _gc_histograms[_gc_generation].observe(_gc_duration_ns)
+                _gc_log = logger.info if _gc_duration_ns > 5_000_000 or _gc_collected > 100 else logger.debug
+                _gc_log(
+                    f"gc_gen{_gc_generation}_periodic",
+                    collected=_gc_collected,
+                    duration_ms=round(_gc_duration_ns / 1_000_000, 3),
+                )
 
             # Last statement of the tick body: how long this loop's own work
             # took. Everything above ran between ``now_tick`` and here, so the

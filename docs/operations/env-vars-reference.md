@@ -48,6 +48,25 @@ Base YAML (config/base/main.yaml)
 | `HFT_TASK_RESTART_BACKOFF_MAX_S` | `30.0` | 重啟等待上限（秒） | 不建議超過 60s |
 | `HFT_SUPERVISOR_QUEUE_LOG_EVERY_S` | `30.0` | queue 深度日誌記錄頻率 | 除錯時縮短至 5s |
 | `HFT_MTM_INCOMPLETE_REPEAT_TICKS` | `3600` | mark-to-market 無法定價時，重覆提醒之間的 supervisor tick 數（1 Hz，故預設為每小時一次）；進入、標的變動、恢復三個邊緣一律立即記錄 | `0` = 只記錄邊緣，不重覆提醒 |
+| `HFT_GC_DISABLE_TRADING` | `0` | `1` = 啟動服務後停用自動 GC，改由 supervisor 明確回收；離開 run 時重新啟用 | 保持預設可使用 Python 自動 GC；手動模式仍保留完整 gen2 回收 |
+| `HFT_GC_GEN0_PERIODIC` | `1` | 手動 GC 模式下啟用年輕代回收；`0` 不會停用 gen2 回收 | 關閉會累積更多年輕物件，增加完整回收成本 |
+| `HFT_GC_GEN0_INTERVAL_TICKS` | `1` | 年輕代回收間隔，最小 1 個 supervisor tick | 舊預設 10 會批次掃描更多物件；每 tick 回收可降低年輕代停頓 |
+| `HFT_GC_GEN2_INTERVAL_TICKS` | `3600` | 完整回收間隔，最小 60 個 supervisor tick；同 tick 到期時只執行 gen2 | 保留 24/7 舊循環參照回收；完整掃描仍可能造成長停頓 |
+
+GC 間隔以 supervisor 完成的 tick 計數（目標 1 Hz），不是硬性牆鐘期限。
+每次明確回收的耗時記錄於 `pipeline_latency_ns{stage="gc_gen0"}` 或
+`pipeline_latency_ns{stage="gc_gen2"}`，標籤在 supervisor 進入迴圈前建立；
+每次另記錄 `gc_gen0_periodic` / `gc_gen2_periodic` 日誌（一般為 debug，
+超過 5 ms 或回收超過 100 個物件為 info）。GC 在事件迴圈同步執行並持有 GIL，
+因此 executor 無法消除停頓。沒有使用 `gc.freeze()`：它會凍結所有已追蹤物件，
+包含仍會變動的啟動期圖形，讓之後失去根參照的凍結循環無法被 gen2 回收；
+週期性解凍會恢復完整掃描成本，再凍結則可能納入更多執行期循環。
+
+`scripts/latency/gc_schedule_bench.py` 可在獨立程序比較一小時模擬政策。
+每 tick gen0 的效益限於年輕代停頓；完整 gen2 的最長停頓仍須依實際 heap 驗證，
+不能由較低的年輕代 p99 推論。gen1 掃描會把存活物件晉升至 gen2，不能取代完整回收。
+若實測顯示大量舊循環累積，可用既有 `HFT_GC_GEN2_INTERVAL_TICKS=60` 縮短回收間隔；
+這會從每小時約 1 次完整停頓增加至約 60 次，不能保證降低由存活圖形主導的停頓。
 
 **Runbook 參考**: [Section 9 — Supervisor restart](../runbooks.md#9-service-task-crash-supervisor-restart)
 
