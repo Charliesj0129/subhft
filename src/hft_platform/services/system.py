@@ -41,6 +41,10 @@ from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
 
+# Where the recorder bridge starts reading the bus: before the first event, to capture all of them. The bus is
+# told the same position at startup (reserve_consumer) so the consumed-slot release cannot pass it first.
+_RECORDER_BRIDGE_START_CURSOR = -1
+
 
 def _payload_field(payload: Any, key: str) -> Any:
     """Read a field from a broker payload that may be a dict or an object.
@@ -1118,6 +1122,11 @@ class HFTSystem:
             # Save bus cursor BEFORE MarketDataService starts publishing events.
             # StrategyRunner will replay from this cursor to avoid missing startup-window events.
             pre_md_cursor = self.bus.cursor
+            # recorder_bridge joins the bus later, after awaits, and reads from the start of the ring. Pin the
+            # ring for it before md can publish: otherwise the strategy runner's consumption moves the consumed-
+            # slot release past the bridge, which would then join behind it and lose the startup events.
+            if not (self._md_record_direct and self._fill_record_direct and self._order_record_direct):
+                self.bus.reserve_consumer("recorder_bridge", _RECORDER_BRIDGE_START_CURSOR)
             self._start_service("md", self.md_service.run())
             # C3: Position recovery MUST complete before exec_router so that
             # exec_router does not apply startup-window fills on top of a
@@ -3491,12 +3500,14 @@ class HFTSystem:
                 reason="all_direct_recording_enabled",
             )
             return
-        # Start from -1 to capture first event
+        # Start from the beginning to capture the first event
         batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
         consumer = (
-            self.bus.consume_batch(batch_size, start_cursor=-1, consumer_name="recorder_bridge")
+            self.bus.consume_batch(
+                batch_size, start_cursor=_RECORDER_BRIDGE_START_CURSOR, consumer_name="recorder_bridge"
+            )
             if batch_size > 1
-            else self.bus.consume(start_cursor=-1, consumer_name="recorder_bridge")
+            else self.bus.consume(start_cursor=_RECORDER_BRIDGE_START_CURSOR, consumer_name="recorder_bridge")
         )
         from hft_platform.contracts.execution import FillEvent, OrderEvent
         from hft_platform.events import BidAskEvent, TickEvent

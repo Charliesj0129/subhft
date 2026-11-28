@@ -469,3 +469,153 @@ class TestOrderDispatchAudit:
             broker_client=client,
         )
         return adapter
+
+
+# ---------------------------------------------------------------------------
+# The recorder bridge is pinned on the bus before market data can publish
+# ---------------------------------------------------------------------------
+
+
+def _startup_stub(events: list[str], *, bus: SimpleNamespace, md_record_direct: bool) -> SimpleNamespace:
+    """The HFTSystem.run() collaborators, reduced to what orders the startup; every started service is logged."""
+    from hft_platform.services.system import HFTSystem
+
+    async def _run_backfill():
+        return SimpleNamespace(
+            inserted=0,
+            broker_fills=0,
+            platform_fills=0,
+            broker_query_error=False,
+            errors=[],
+        )
+
+    def _start_service(name: str, coro):
+        events.append(name)
+        coro.close()
+
+    return SimpleNamespace(
+        running=False,
+        loop=None,
+        _exec_startup_overflow_lost=False,
+        _recovery_halted=False,
+        _md_record_direct=md_record_direct,
+        _fill_record_direct=True,
+        _order_record_direct=True,
+        _on_sighup=lambda: None,
+        _on_exec=lambda *_args, **_kwargs: None,
+        _env_float=HFTSystem._env_float,
+        _start_service=_start_service,
+        _recorder_bridge=lambda: asyncio.sleep(0),
+        _probe_event_loop_lag=MagicMock(return_value=asyncio.sleep(0)),
+        _order_session_watchdog=MagicMock(return_value=asyncio.sleep(0)),
+        _supervise=MagicMock(return_value=asyncio.sleep(0)),
+        _restore_daily_loss_state=lambda: None,
+        _apply_manual_latches=lambda _latches: None,
+        _bind_checkpoint_identity=lambda: True,
+        _audit_engine_start=HFTSystem._audit_engine_start,
+        stop_async=MagicMock(return_value=asyncio.sleep(0)),
+        evidence_writer=MagicMock(record_transition=MagicMock()),
+        order_client=MagicMock(login=MagicMock(), set_execution_callbacks=MagicMock()),
+        session_governor=None,
+        autonomy_monitor=None,
+        position_stuck_monitor=None,
+        recorder=_AsyncRunner(),
+        bus=bus,
+        md_service=_AsyncRunner(),
+        exec_service=_AsyncRunner(),
+        gateway_service=None,
+        risk_engine=_AsyncRunner(),
+        order_adapter=_AsyncRunner(),
+        execution_gateway=_AsyncExecutionGateway(),
+        startup_verifier=MagicMock(
+            recover=MagicMock(
+                return_value=asyncio.sleep(
+                    0,
+                    result=SimpleNamespace(halted=False, source="broker_only", positions_loaded=1, auto_corrected=0),
+                )
+            )
+        ),
+        startup_fill_reconciler=SimpleNamespace(run=_run_backfill),
+        registry=SimpleNamespace(account_id="acct-1", broker_id="shioaji"),
+        checkpoint_writer=None,
+        recon_service=_AsyncRunner(),
+        strategy_runner=SimpleNamespace(
+            run=_AsyncRunner().run,
+            set_start_cursor=MagicMock(),
+            _rejection_queue=None,
+        ),
+        session_hook_manager=SimpleNamespace(enabled=False),
+        health_server=_AsyncRunner(),
+    )
+
+
+def _quiet_startup_env(monkeypatch) -> None:
+    monkeypatch.setenv("HFT_CHECKPOINT_ENABLED", "0")
+    monkeypatch.setenv("HFT_PNL_EXPORTER_ENABLED", "0")
+    monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")  # no stall watchdog thread; see the backfill test above
+
+
+class TestRecorderBridgeReservation:
+    @pytest.mark.asyncio
+    async def test_system_run_reserves_the_recorder_bridge_before_md_starts_publishing(self, monkeypatch):
+        from hft_platform.services.system import HFTSystem
+
+        _quiet_startup_env(monkeypatch)
+        events: list[str] = []
+        bus = SimpleNamespace(
+            cursor=17,
+            reserve_consumer=lambda name, start_seq: events.append(f"reserve:{name}:{start_seq}"),
+        )
+        sys_obj = _startup_stub(events, bus=bus, md_record_direct=False)
+
+        await HFTSystem.run(sys_obj)
+
+        # reserved at the bridge's own start cursor, exactly once, before md and long before the bridge itself
+        assert events.count("reserve:recorder_bridge:-1") == 1
+        assert events.index("reserve:recorder_bridge:-1") < events.index("md") < events.index("recorder_bridge")
+        sys_obj.strategy_runner.set_start_cursor.assert_called_once_with(17)
+
+    @pytest.mark.asyncio
+    async def test_system_run_reserves_nothing_when_the_recorder_bridge_does_not_run(self, monkeypatch):
+        from hft_platform.services.system import HFTSystem
+
+        _quiet_startup_env(monkeypatch)
+        events: list[str] = []
+        bus = SimpleNamespace(
+            cursor=17,
+            reserve_consumer=lambda name, start_seq: events.append(f"reserve:{name}:{start_seq}"),
+        )
+        sys_obj = _startup_stub(events, bus=bus, md_record_direct=True)
+
+        await HFTSystem.run(sys_obj)
+
+        assert not [event for event in events if event.startswith("reserve:")]
+        assert "recorder_bridge" not in events
+        assert "md" in events
+
+    @pytest.mark.asyncio
+    async def test_recorder_bridge_consumes_from_the_cursor_it_was_reserved_at(self, monkeypatch):
+        from hft_platform.services import system as system_mod
+        from hft_platform.services.system import HFTSystem
+
+        monkeypatch.setenv("HFT_BUS_BATCH_SIZE", "0")
+        started_at: list[int] = []
+
+        async def _no_events(*, start_cursor, consumer_name):
+            started_at.append(start_cursor)
+            return
+            yield  # an async generator that yields nothing
+
+        sys_obj = SimpleNamespace(
+            _md_record_direct=False,
+            _fill_record_direct=True,
+            _order_record_direct=True,
+            bus=SimpleNamespace(consume=_no_events),
+            symbol_metadata=MagicMock(),
+            price_scale_provider=MagicMock(),
+        )
+
+        await HFTSystem._recorder_bridge(sys_obj)
+
+        assert started_at == [system_mod._RECORDER_BRIDGE_START_CURSOR]
+        assert system_mod._RECORDER_BRIDGE_START_CURSOR == -1

@@ -310,6 +310,10 @@ class RingBufferBus:
             "off",
         }
         self._release_every = max(1, int(os.getenv("HFT_BUS_RELEASE_EVERY", "256")))
+        # Most slots one release clears. A consumer that catches up a backlog of k events would otherwise free all k
+        # (each owning arrays) inside a single publish; the rest follows on the next publishes. At least 2, so a
+        # backlog drains faster than one publish adds to it.
+        self._release_max_slots = max(2, int(os.getenv("HFT_BUS_RELEASE_MAX_SLOTS", str(2 * self._release_every))))
         # Highest seq whose slot was set to None by release (-1: none yet); read by consumers to detect a gap.
         # Published BEFORE the slots are cleared, so a consumer that reads a cleared slot also sees the watermark.
         self._released_upto: int = -1
@@ -319,7 +323,8 @@ class RingBufferBus:
         # ring (a dead consumer holds the release exactly as the unreleased ring held them). Only forget_consumer() or
         # the consumer itself moves a pin.
         self._release_pins: dict[str, int] = {}
-        # Orders pin registration/removal against a release; held for a few instructions, never across an await.
+        # Orders every pin insert, move and removal against the release's min() over the pins; held for a few
+        # instructions, never across an await, never while slots are being cleared.
         self._release_lock = threading.Lock()
         self._notify_every = max(1, int(os.getenv("HFT_BUS_NOTIFY_EVERY", "1")))
         self._notify_counter = 0
@@ -387,6 +392,34 @@ class RingBufferBus:
             )
         return start
 
+    def reserve_consumer(self, consumer_name: str, start_seq: int) -> bool:
+        """Pin the ring at `start_seq` for a consumer that registers later; True if a pin was inserted.
+
+        `start_seq` is the position the consumer will pass to consume() as `start_cursor`. Without a pin the
+        release would run past it while it is still starting, and it would join behind the watermark and lose
+        the events published in between. An existing pin is never moved: it records what that name really
+        consumed, so lowering it could put the pin under the watermark (the release would stall) and raising
+        it could release events the consumer has not read. A no-op, returning False, when the release is off.
+
+        The caller must start the consumer afterwards, or call forget_consumer(): a reserved consumer that
+        never runs holds the release exactly as the unreleased ring held its events.
+        """
+        if not self._release_consumed_enabled:
+            return False
+        with self._release_lock:
+            if consumer_name in self._release_pins:
+                return False
+            released = self._released_upto
+            self._release_pins[consumer_name] = start_seq
+        if start_seq < released:
+            logger.warning(
+                "bus_consumer_reserved_behind_release",
+                consumer=consumer_name,
+                start_seq=start_seq,
+                released_upto=released,
+            )
+        return True
+
     def forget_consumer(self, consumer_name: str) -> None:
         """Drop a consumer's release pin for good, so the release no longer waits for it.
 
@@ -395,33 +428,63 @@ class RingBufferBus:
         with self._release_lock:
             self._release_pins.pop(consumer_name, None)
 
-    def _release_consumed(self, cursor: int) -> None:
-        """Drop the slots every registered consumer has already read, so refcounting frees their events.
+    def _advance_pin(self, consumer_name: str, seq: int) -> None:
+        """Move a consumer's existing pin to `seq`; a no-op for a name with no pin (forgotten, or release off).
 
-        Runs every `_release_every` publishes. With no pinned consumer nothing is released.
+        The membership check and the store are one step under the release lock: apart, a forget_consumer() in
+        between would be undone, and on a free-threaded build the insert could resize the dict while the
+        producer iterates it in min(). Runs once per catch-up, not per event.
         """
-        self._release_due_seq = cursor + self._release_every
+        if not self._release_consumed_enabled:
+            return
+        with self._release_lock:
+            if consumer_name in self._release_pins:
+                self._release_pins[consumer_name] = seq
+
+    def _release_when_due(self) -> None:
+        """Run the release once the cursor has reached its deadline; called after the publish wakeup."""
+        if self.single_writer:
+            self._release_consumed(self.cursor)
+            return
+        # Several producer threads: a slot cleared here must not be one a producer has just overwritten a lap on,
+        # so the release runs under the same lock as the cursor update.
+        with self._publish_lock:
+            self._release_consumed(self.cursor)
+
+    def _release_consumed(self, cursor: int) -> None:
+        """Drop up to `_release_max_slots` slots every pinned consumer has already read, so refcounting frees them.
+
+        Due every `_release_every` publishes, and again on the very next publish while a backlog is left: a
+        consumer that catches up k events costs ceil(k / max_slots) bounded releases, not one k-slot pause.
+        The backlog cannot outlast the ring: each release shrinks (cursor - released) by max_slots - 1 net of
+        the one event a publish adds, and max_slots >= 2. With no pinned consumer nothing is released.
+        """
         with self._release_lock:
             pins = self._release_pins
-            if not pins:
-                return
-            # A pinned consumer's pin only moves forward while it runs, so a value read just before it advances
-            # is lower than the truth: releasing less is safe, releasing more is impossible. A pin is inserted
-            # or removed under this lock, so a new consumer can never be passed by a release in flight.
-            target = min(pins.values())
             released = self._released_upto
+            # A pinned consumer's pin only moves forward while it runs, so a value read just before it advances
+            # is lower than the truth: releasing less is safe, releasing more is impossible. A pin is inserted,
+            # moved or removed under this lock, so a new consumer can never be passed by a release in flight.
+            target = min(pins.values()) if pins else released
+            self._release_due_seq = cursor + self._release_every
             if target > cursor:
                 target = cursor
             if target <= released:
                 return
             # Only seqs newer than cursor - size still own their slot; an older one was overwritten.
-            first = released + 1
-            oldest = cursor - self.size + 1
-            if first < oldest:
-                first = oldest
+            first = max(released + 1, cursor - self.size + 1)
+            count = target - first + 1
+            if count > self._release_max_slots:
+                # The watermark advances only as far as the slots actually cleared below.
+                count = self._release_max_slots
+                target = first + count - 1
+                self._release_due_seq = cursor + 1
+            # Published BEFORE the slots are cleared, so a consumer that reads a cleared slot also sees it.
             self._released_upto = target
-            if first <= target:
-                self._clear_slots(first, target - first + 1)
+        # Outside the lock: a consumer or a registration never waits for the events to be freed. Nothing else
+        # clears slots: one producer thread (single writer) or the publish lock (several) serializes releases.
+        if count > 0:
+            self._clear_slots(first, count)
 
     def _clear_slots(self, first_seq: int, count: int) -> None:
         """Set `count` consecutive ring slots, starting at `first_seq`'s, to None (count <= size)."""
@@ -500,8 +563,7 @@ class RingBufferBus:
 
         # Inject GapEvent so downstream strategies can reset stale state
         self._consumer_positions[consumer_name] = floor
-        if consumer_name in self._release_pins:
-            self._release_pins[consumer_name] = floor
+        self._advance_pin(consumer_name, floor)
         lag_gauge.set(self.cursor - floor)
         self._telemetry.gap_event_counter.inc()
         return GapEvent(
@@ -640,8 +702,6 @@ class RingBufferBus:
             self.buffer[next_seq % self.size] = event
         self.cursor = next_seq
         self._notify_counter += 1
-        if next_seq >= self._release_due_seq:
-            self._release_consumed(next_seq)
 
     def _bind_running_loop(self) -> None:
         """Remember the running loop and its thread; a no-op when called outside a running loop."""
@@ -697,6 +757,9 @@ class RingBufferBus:
         else:
             self._publish_serialized(event)
         self._notify()
+        # After the wakeup: freeing consumed events never delays the one a consumer is waiting for.
+        if self.cursor >= self._release_due_seq:
+            self._release_when_due()
 
     def publish_many_nowait(self, events: List[Any]) -> None:
         """Synchronous publish for a batch; same threading contract as `publish_nowait`."""
@@ -708,6 +771,8 @@ class RingBufferBus:
                 for event in events:
                     self._publish_unlocked(event)
         self._notify()
+        if self.cursor >= self._release_due_seq:
+            self._release_when_due()
 
     async def publish(self, event: Any):
         """Publish event to shared buffer."""
@@ -717,6 +782,8 @@ class RingBufferBus:
             # Single-writer fast path: no lock
             self._publish_unlocked(event)
             self._notify()
+            if self.cursor >= self._release_due_seq:
+                self._release_when_due()
             return
 
         async with self.write_lock:
@@ -734,6 +801,8 @@ class RingBufferBus:
             # forever -- a permanent hang, not a slowdown -- on the
             # multi-writer path.
             self._notify()
+            if self.cursor >= self._release_due_seq:
+                self._release_when_due()
 
     async def publish_many(self, events: List[Any]):
         """Publish a batch of events."""
@@ -743,6 +812,8 @@ class RingBufferBus:
             for event in events:
                 self._publish_unlocked(event)
             self._notify()
+            if self.cursor >= self._release_due_seq:
+                self._release_when_due()
             return
 
         async with self.write_lock:
@@ -752,6 +823,8 @@ class RingBufferBus:
             # Same lost-wakeup as publish() above: per-consumer signals, not
             # the legacy shared one.
             self._notify()
+            if self.cursor >= self._release_due_seq:
+                self._release_when_due()
 
     async def consume(self, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator for consuming events."""
@@ -767,7 +840,6 @@ class RingBufferBus:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
         lag_gauge = self._telemetry.bind_consumer(consumer_name)
-        pins = self._release_pins
 
         try:
             # Before the first wait: a consumer that has not caught up yet must still hold back the release.
@@ -829,8 +901,7 @@ class RingBufferBus:
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
-                if consumer_name in pins:
-                    pins[consumer_name] = local_seq
+                self._advance_pin(consumer_name, local_seq)
                 lag_gauge.set(self.cursor - local_seq)
                 if interrupted:
                     continue
@@ -858,7 +929,6 @@ class RingBufferBus:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
         lag_gauge = self._telemetry.bind_consumer(consumer_name)
-        pins = self._release_pins
 
         try:
             local_seq = self._register_consumer(consumer_name, local_seq)  # before the first wait; see consume()
@@ -919,8 +989,7 @@ class RingBufferBus:
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
-                if consumer_name in pins:
-                    pins[consumer_name] = local_seq
+                self._advance_pin(consumer_name, local_seq)
                 lag_gauge.set(self.cursor - local_seq)
                 if interrupted:
                     continue

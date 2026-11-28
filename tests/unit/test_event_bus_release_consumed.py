@@ -136,6 +136,7 @@ def _make_bus(
     *,
     size: int = 16,
     release_every: str = "1",
+    max_slots: str = "1000000",
     release: str = "1",
     single_writer: str = "1",
     telemetry: _Telemetry | None = None,
@@ -146,6 +147,9 @@ def _make_bus(
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", False)
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "event")
     monkeypatch.setenv("HFT_BUS_RELEASE_EVERY", release_every)
+    # Effectively uncapped unless a test sets it: the tests of the release itself use release_every=1, whose
+    # default cap (2 slots per release) would hide what they check.
+    monkeypatch.setenv("HFT_BUS_RELEASE_MAX_SLOTS", max_slots)
     monkeypatch.setenv("HFT_BUS_RELEASE_CONSUMED", release)
     monkeypatch.setenv("HFT_BUS_SINGLE_WRITER", single_writer)
     monkeypatch.setenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", halt_threshold)
@@ -536,6 +540,7 @@ def test_released_event_object_is_freed_without_a_gc_pass_only_when_release_is_o
 
 def test_release_runs_exactly_at_the_default_cadence_of_256_publishes(monkeypatch):
     monkeypatch.delenv("HFT_BUS_RELEASE_EVERY", raising=False)
+    monkeypatch.delenv("HFT_BUS_RELEASE_MAX_SLOTS", raising=False)
     monkeypatch.delenv("HFT_BUS_RELEASE_CONSUMED", raising=False)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", False)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", False)
@@ -620,6 +625,7 @@ def test_release_leaves_the_typed_tick_ring_untouched(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", False)
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "event")
     monkeypatch.setenv("HFT_BUS_RELEASE_EVERY", "1")
+    monkeypatch.setenv("HFT_BUS_RELEASE_MAX_SLOTS", "1000000")
     monkeypatch.setenv("HFT_BUS_RELEASE_CONSUMED", "1")
     bus = event_bus_mod.RingBufferBus(size=16)
 
@@ -804,3 +810,373 @@ def test_shutdown_drain_still_finds_events_a_crashed_runner_never_processed(monk
     assert bus.released_upto == 4
     assert result == (30, 0)
     assert processed == events[5:]
+
+
+class _LockGuardedPins(dict):
+    """Pin map that records every access made while the bus's release lock is not held."""
+
+    def __init__(self, lock: Any) -> None:
+        super().__init__()
+        self._lock = lock
+        self.accesses = 0
+        self.unlocked: list[str] = []
+
+    def _check(self, operation: str) -> None:
+        self.accesses += 1
+        if not self._lock.locked():
+            self.unlocked.append(operation)
+
+    def __contains__(self, key: object) -> bool:
+        self._check("contains")
+        return super().__contains__(key)
+
+    def __setitem__(self, key: str, value: int) -> None:
+        self._check("set")
+        super().__setitem__(key, value)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        self._check("get")
+        return super().get(key, default)
+
+    def pop(self, key: str, *default: Any) -> Any:
+        self._check("pop")
+        return super().pop(key, *default)
+
+    def values(self) -> Any:
+        self._check("values")
+        return super().values()
+
+
+def _spy_clear_slots(monkeypatch: pytest.MonkeyPatch, bus: event_bus_mod.RingBufferBus, observe: Any) -> list[int]:
+    """Record the slot count of every clear; `observe()` is also called, at the moment of each clear."""
+    counts: list[int] = []
+    real_clear = bus._clear_slots
+
+    def spy(first_seq: int, count: int) -> None:
+        counts.append(count)
+        observe()
+        real_clear(first_seq, count)
+
+    monkeypatch.setattr(bus, "_clear_slots", spy)
+    return counts
+
+
+@_BOTH_READ_PATHS
+def test_backlog_is_released_in_bounded_steps_on_consecutive_publishes_and_drains_completely(monkeypatch, batch_size):
+    bus = _make_bus(monkeypatch, size=1024, release_every="8", max_slots="32")
+    cleared = _spy_clear_slots(monkeypatch, bus, lambda: None)
+
+    async def scenario():
+        consumer = _Consumer(bus, "only", start_cursor=-1, batch_size=batch_size)
+        consumer.start()
+        await _settle()
+        events = _publish(bus, 0, 600)  # the consumer cannot run: it pins seq -1, so nothing is released
+        released_while_behind = bus.released_upto
+        await _settle()  # it catches up the whole 600-event backlog in one step
+        released_per_publish: list[int] = []
+        for seq in range(600, 660):
+            before = bus.released_upto
+            events += _publish(bus, seq, 1)
+            released_per_publish.append(bus.released_upto - before)
+        await _settle()
+        await consumer.stop()
+        return events, released_while_behind, released_per_publish, consumer.items
+
+    events, released_while_behind, released_per_publish, items = asyncio.run(scenario())
+
+    assert released_while_behind == -1
+    assert max(cleared) == 32
+    assert sum(cleared) == 600
+    assert len(cleared) == 19  # 18 full steps and one of 24
+    assert max(released_per_publish) == 32
+    steps = [index for index, advanced in enumerate(released_per_publish) if advanced]
+    assert steps[0] <= 7  # the first step waits for the normal cadence...
+    assert steps == list(range(steps[0], steps[0] + 19))  # ...then every publish steps until the backlog is gone
+    assert bus.released_upto == 599
+    assert bus.buffer[:600] == [None] * 600
+    assert bus.buffer[600:660] == events[600:660]
+    assert items == events
+
+
+def test_release_after_a_drained_backlog_returns_to_the_normal_cadence(monkeypatch):
+    bus = _make_bus(monkeypatch, size=1024, release_every="8", max_slots="32")
+    cleared = _spy_clear_slots(monkeypatch, bus, lambda: None)
+
+    async def scenario():
+        consumer = _Consumer(bus, "only", start_cursor=-1)
+        consumer.start()
+        await _settle()
+        _publish(bus, 0, 100)
+        await _settle()
+        _publish(bus, 100, 40)  # drains the backlog, ends within the second step
+        cleared.clear()
+        for first_seq in range(140, 240, 4):
+            _publish(bus, first_seq, 4)
+            await _settle()  # the consumer keeps up, one small step behind the publisher
+        await consumer.stop()
+
+    asyncio.run(scenario())
+
+    assert 0 < len(cleared) <= 100 // 8 + 1  # one release per 8 publishes, not one per publish
+    assert max(cleared) <= 32
+
+
+@pytest.mark.parametrize("single_writer", ["1", "0"], ids=["single_writer", "multi_writer"])
+@_BOTH_READ_PATHS
+def test_release_runs_after_the_wakeup_of_the_publish_that_triggers_it(monkeypatch, batch_size, single_writer):
+    bus = _make_bus(monkeypatch, single_writer=single_writer)
+    signals_set_at_clear: list[list[bool]] = []
+    _spy_clear_slots(monkeypatch, bus, lambda: signals_set_at_clear.append([s.is_set() for s in bus._consumer_signals]))
+
+    async def scenario():
+        consumer = _Consumer(bus, "only", start_cursor=-1, batch_size=batch_size)
+        consumer.start()
+        await _settle()
+        _publish(bus, 0, 5)
+        await _settle()  # the consumer is parked on its signal again, at position 4
+        signals_set_at_clear.clear()
+        _publish(bus, 5, 1)  # this publish releases seq 0..4
+        await consumer.stop()
+
+    asyncio.run(scenario())
+
+    assert signals_set_at_clear == [[True]]
+
+
+def test_multi_writer_release_clears_slots_under_the_publish_lock(monkeypatch):
+    bus = _make_bus(monkeypatch, single_writer="0")
+    lock_held_at_clear: list[bool] = []
+    _spy_clear_slots(monkeypatch, bus, lambda: lock_held_at_clear.append(bus._publish_lock.locked()))
+
+    async def scenario():
+        consumer = _Consumer(bus, "only", start_cursor=-1)
+        consumer.start()
+        await _settle()
+        _publish(bus, 0, 5)
+        await _settle()
+        _publish(bus, 5, 1)
+        await consumer.stop()
+
+    asyncio.run(scenario())
+
+    assert lock_held_at_clear == [True]
+    assert not bus._publish_lock.locked()
+
+
+def test_release_max_slots_defaults_to_twice_the_cadence_and_is_never_below_two(monkeypatch):
+    monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", False)
+    monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", False)
+    monkeypatch.delenv("HFT_BUS_RELEASE_EVERY", raising=False)
+    monkeypatch.delenv("HFT_BUS_RELEASE_MAX_SLOTS", raising=False)
+    default_bus = event_bus_mod.RingBufferBus(size=1024)
+    monkeypatch.setenv("HFT_BUS_RELEASE_EVERY", "50")
+    cadence_bus = event_bus_mod.RingBufferBus(size=1024)
+
+    slots = [
+        default_bus._release_max_slots,
+        cadence_bus._release_max_slots,
+        _make_bus(monkeypatch, max_slots="100")._release_max_slots,
+        _make_bus(monkeypatch, max_slots="1")._release_max_slots,
+        _make_bus(monkeypatch, max_slots="0")._release_max_slots,
+    ]
+
+    assert slots == [512, 100, 100, 2, 2]
+
+
+@_BOTH_READ_PATHS
+def test_reserved_consumer_joining_after_many_publishes_gets_every_event_from_its_start(monkeypatch, batch_size):
+    telemetry = _Telemetry()
+    bus = _make_bus(monkeypatch, size=1024, release_every="4", telemetry=telemetry)
+
+    async def scenario():
+        reserved = bus.reserve_consumer("recorder_bridge", -1)
+        runner = _Consumer(bus, "strategy_runner", start_cursor=-1, batch_size=batch_size)
+        runner.start()
+        await _settle()
+        events: list[_Ev] = []
+        for first_seq in range(0, 40, 4):
+            events += _publish(bus, first_seq, 4)
+            await _settle()  # the runner consumes everything; the bridge has not started
+        released_before_bridge = bus.released_upto
+        bridge = _Consumer(bus, "recorder_bridge", start_cursor=-1, batch_size=batch_size)
+        bridge.start()
+        await _settle()
+        for first_seq in range(40, 80, 4):
+            events += _publish(bus, first_seq, 4)
+            await _settle()
+        released_after_bridge = bus.released_upto
+        await bridge.stop()
+        await runner.stop()
+        return events, reserved, released_before_bridge, released_after_bridge, bridge.items
+
+    events, reserved, released_before, released_after, bridge_items = asyncio.run(scenario())
+
+    assert reserved is True
+    assert released_before == -1  # the runner read 40 events, but the reservation held the release
+    assert bridge_items == events  # every event from seq 0, in order, and no GapEvent among them
+    assert telemetry.gap_event_counter.count == 0
+    assert released_after >= 70  # once the bridge runs, the release follows it
+
+
+@_BOTH_READ_PATHS
+def test_consumer_that_joins_after_the_release_moved_on_without_a_reservation_gets_a_gap(monkeypatch, batch_size):
+    bus = _make_bus(monkeypatch, size=1024, release_every="4")
+
+    async def scenario():
+        runner = _Consumer(bus, "strategy_runner", start_cursor=-1, batch_size=batch_size)
+        runner.start()
+        await _settle()
+        events: list[_Ev] = []
+        for first_seq in range(0, 40, 4):
+            events += _publish(bus, first_seq, 4)
+            await _settle()
+        bridge = _Consumer(bus, "recorder_bridge", start_cursor=-1, batch_size=batch_size)
+        bridge.start()
+        await _settle()
+        await bridge.stop()
+        await runner.stop()
+        return events, bridge.items
+
+    events, bridge_items = asyncio.run(scenario())
+
+    gap = bridge_items[0]
+    assert isinstance(gap, GapEvent)
+    assert gap.first_missed_seq == 0
+    assert bridge_items[1:] == events[gap.last_missed_seq + 1 :]
+
+
+def test_reserve_consumer_keeps_an_existing_pin_where_it_is(monkeypatch):
+    bus = _make_bus(monkeypatch, size=64)
+
+    async def scenario():
+        runner = _Consumer(bus, "runner", start_cursor=-1)
+        runner.start()
+        await _settle()
+        _publish(bus, 0, 6)
+        await _settle()  # the runner's pin is 5
+        lower = bus.reserve_consumer("runner", -1)
+        higher = bus.reserve_consumer("runner", 50)
+        pin = bus._release_pins["runner"]
+        _publish(bus, 6, 1)
+        released = bus.released_upto
+        await runner.stop()
+        return lower, higher, pin, released
+
+    assert asyncio.run(scenario()) == (False, False, 5, 5)
+
+
+def test_reserve_consumer_is_a_no_op_when_the_release_is_off(monkeypatch):
+    bus = _make_bus(monkeypatch, release="0")
+
+    reserved = bus.reserve_consumer("recorder_bridge", -1)
+
+    assert reserved is False
+    assert bus._release_pins == {}
+
+
+def test_forgetting_a_reserved_consumer_that_never_started_lets_the_release_advance(monkeypatch):
+    bus = _make_bus(monkeypatch, size=64)
+
+    async def scenario():
+        bus.reserve_consumer("recorder_bridge", -1)
+        runner = _Consumer(bus, "runner", start_cursor=-1)
+        runner.start()
+        await _settle()
+        _publish(bus, 0, 5)
+        await _settle()
+        _publish(bus, 5, 1)
+        held = bus.released_upto
+        bus.forget_consumer("recorder_bridge")
+        _publish(bus, 6, 1)
+        released = bus.released_upto
+        await runner.stop()
+        return held, released
+
+    assert asyncio.run(scenario()) == (-1, 4)  # the runner has read seq 0..4; seq 5 is still unread
+
+
+def test_consumer_reserved_behind_the_watermark_is_logged_and_still_gets_an_explicit_gap(monkeypatch):
+    log = _RecordingLogger()
+    monkeypatch.setattr(event_bus_mod, "logger", log)
+    bus = _make_bus(monkeypatch, size=64)
+
+    async def scenario():
+        runner = _Consumer(bus, "runner", start_cursor=-1)
+        runner.start()
+        await _settle()
+        _publish(bus, 0, 5)
+        await _settle()
+        _publish(bus, 5, 1)  # releases seq 0..4
+        reserved = bus.reserve_consumer("late", 1)
+        late = _Consumer(bus, "late", start_cursor=1)
+        late.start()
+        await _settle()
+        await late.stop()
+        await runner.stop()
+        return reserved, late.items
+
+    reserved, late_items = asyncio.run(scenario())
+
+    assert reserved is True
+    assert log.events("bus_consumer_reserved_behind_release") == [
+        (
+            "warning",
+            "bus_consumer_reserved_behind_release",
+            {"consumer": "late", "start_seq": 1, "released_upto": 4},
+        )
+    ]
+    gap = late_items[0]
+    assert isinstance(gap, GapEvent)
+    assert (gap.first_missed_seq, gap.last_missed_seq) == (2, 4)
+
+
+def test_every_pin_access_happens_under_the_release_lock(monkeypatch):
+    bus = _make_bus(monkeypatch, size=8)
+    pins = _LockGuardedPins(bus._release_lock)
+    bus._release_pins = pins
+
+    async def scenario():
+        runner = _Consumer(bus, "runner", start_cursor=-1)
+        runner.start()
+        await _settle()
+        _publish(bus, 0, 3)
+        await _settle()
+        _publish(bus, 3, 1)  # release moves past seq 0..2
+        late = _Consumer(bus, "late", start_cursor=-1)  # behind the watermark: the gap path moves its pin
+        late.start()
+        await _settle()
+        bus.reserve_consumer("reserved", 0)
+        _publish(bus, 4, 1)
+        await _settle()
+        bus.forget_consumer("late")
+        _publish(bus, 5, 1)
+        await _settle()
+        await late.stop()
+        await runner.stop()
+
+    asyncio.run(scenario())
+
+    assert pins.accesses > 10
+    assert pins.unlocked == []
+
+
+def test_catch_up_does_not_bring_back_a_pin_that_was_forgotten(monkeypatch):
+    bus = _make_bus(monkeypatch, size=64)
+
+    async def scenario():
+        runner = _Consumer(bus, "runner", start_cursor=-1)
+        runner.start()
+        await _settle()
+        _publish(bus, 0, 3)
+        await _settle()
+        bus.forget_consumer("runner")
+        _publish(bus, 3, 3)
+        await _settle()  # the runner catches up while it has no pin
+        pins_after_catch_up = dict(bus._release_pins)
+        await runner.stop()
+        return pins_after_catch_up, runner.items
+
+    pins_after_catch_up, items = asyncio.run(scenario())
+
+    assert pins_after_catch_up == {}
+    assert [item.seq for item in items] == [0, 1, 2, 3, 4, 5]
