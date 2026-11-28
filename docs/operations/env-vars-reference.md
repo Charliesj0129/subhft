@@ -33,6 +33,8 @@ Base YAML (config/base/main.yaml)
 | `HFT_KILL_LEDGER_ENABLED` | `1` | `1` 時 `promote_alpha()` 會在 Gate-C 拋例外或 Gate-D 拒絕時寫入 `audit.alpha_kill_ledger`；設 `0` 可關閉自動寫入（除錯 / operator dry-run） |
 | `HFT_ALPHA_KILL_LEDGER_PATH` | `research/alphas/_kill_ledger.jsonl` | 覆寫離線 kill-ledger jsonl sink 路徑（測試用；生產環境不應設定） |
 | `HFT_BUS_BATCH_SIZE` | `0` | >1 時使用 batch consumer，減少事件迴圈喚醒次數 |
+| `HFT_BUS_RELEASE_CONSUMED` | `1` | `1` = `RingBufferBus` 每 `HFT_BUS_RELEASE_EVERY` 次 publish，把所有已註冊 consumer 都讀過的 ring slot 設為 `None`，讓 refcount 立即釋放事件（否則 65,536 格 ring 會把已消費事件留在 GC 老世代，拉長 gen2 暫停）。釋放以 consumer 名稱的 pin 為準：沒有任何 pin 時不釋放；consumer 的 generator 關閉（崩潰）後 pin 仍保留，重啟的同名 consumer 不會漏掉事件（死掉的 consumer 與舊行為一樣讓 ring 保留事件），永久退場的 consumer 需呼叫 `bus.forget_consumer(name)` 才會移除 pin。`0` / `false` / `no` / `off` = 完全關閉（維持舊行為：ring 保留最近 `size` 筆）。`start_cursor` 落在已釋放範圍的 consumer：同名 consumer 自己的 pin 已涵蓋被釋放的範圍（崩潰重啟）時，靜默從 `released_upto` 續讀（記錄 `bus_consumer_rejoined_after_release`，不發 `GapEvent`、不計 overflow）；從未出現過的名稱（遲到加入）會收到 `GapEvent` 並只計入 gap 指標（不計 overflow / HALT）。ring 被覆寫造成的 overflow 計法不變；公開唯讀屬性 `bus.released_upto` 為已釋放的最高 seq（`-1` = 尚未釋放） |
+| `HFT_BUS_RELEASE_EVERY` | `256` | 釋放已消費 slot 的間隔（以 publish 次數計，下限 1）；僅在 `HFT_BUS_RELEASE_CONSUMED` 開啟時有效 |
 | `HFT_BROKER` | `shioaji` | Broker 後端選擇：`shioaji` / `fubon` |
 | `HFT_SDK_STDOUT` | `devnull` | `python -m hft_platform.main` 與 `hft run`（含 `python -m hft_platform run`，即 Dockerfile CMD）啟動時把 fd 1 指向 `/dev/null`（`hft run --mode replay` 不經此路徑）。Shioaji 原生核心會把 session 事件（內含登入身分證字號）直接印到 stdout，繞過 structlog 的遮蔽；engine 自己的 log 走 stderr。`inherit` = 保留 stdout（只在本機除錯用）；其他值一律當 `devnull` |
 | `SYMBOLS_CONFIG` | `config/symbols.yaml` | 交易標的設定檔路徑 |

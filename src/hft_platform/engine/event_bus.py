@@ -10,6 +10,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.engine.event_bus_telemetry import (
     NOOP_EVENT_BUS_TELEMETRY,
+    ConsumerLagSink,
     EventBusTelemetry,
 )
 from hft_platform.events import GapEvent
@@ -23,6 +24,8 @@ _WAIT_MODE = os.getenv("HFT_BUS_WAIT_MODE", "event").lower()
 _USE_TYPED_TICK_RING = os.getenv("HFT_BUS_TYPED_TICK_RING", "0").lower() not in {"0", "false", "no", "off"}
 _USE_TYPED_BOOK_RINGS = os.getenv("HFT_BUS_TYPED_BOOK_RINGS", "0").lower() not in {"0", "false", "no", "off"}
 _TYPED_BIDASK_PACKED_LEVELS = max(1, int(os.getenv("HFT_BUS_TYPED_BIDASK_PACKED_LEVELS", "5")))
+# Release deadline of a bus whose consumed-slot release is off: never reached, so publish pays one int compare.
+_NEVER_SEQ = 1 << 62
 
 
 class _PyFastTickRingBuffer:
@@ -298,6 +301,26 @@ class RingBufferBus:
         self.signal = None if _WAIT_MODE == "spin" else asyncio.Event()
         self._consumer_signals: list[asyncio.Event] = []
         self._consumer_positions: dict[str, int] = {}
+        # Consumed-slot release: without it the ring pins the last `size` events, and every GC-tracked object they
+        # own, in the old generations long after all consumers read them (each gen2 pass rescans them all).
+        self._release_consumed_enabled = os.getenv("HFT_BUS_RELEASE_CONSUMED", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        self._release_every = max(1, int(os.getenv("HFT_BUS_RELEASE_EVERY", "256")))
+        # Highest seq whose slot was set to None by release (-1: none yet); read by consumers to detect a gap.
+        # Published BEFORE the slots are cleared, so a consumer that reads a cleared slot also sees the watermark.
+        self._released_upto: int = -1
+        self._release_due_seq: int = self._release_every - 1 if self._release_consumed_enabled else _NEVER_SEQ
+        # Release pins: the seq each consumer NAME has fully consumed. Unlike _consumer_positions they survive the
+        # generator closing, so a consumer that crashed and restarts finds the events it never processed still in the
+        # ring (a dead consumer holds the release exactly as the unreleased ring held them). Only forget_consumer() or
+        # the consumer itself moves a pin.
+        self._release_pins: dict[str, int] = {}
+        # Orders pin registration/removal against a release; held for a few instructions, never across an await.
+        self._release_lock = threading.Lock()
         self._notify_every = max(1, int(os.getenv("HFT_BUS_NOTIFY_EVERY", "1")))
         self._notify_counter = 0
         self._spin_sleep = float(os.getenv("HFT_BUS_SPIN_SLEEP", "0"))
@@ -336,6 +359,157 @@ class RingBufferBus:
                 window_s=self._overflow_window_s,
                 threshold=self._overflow_rate_threshold,
             )
+
+    @property
+    def released_upto(self) -> int:
+        """Highest seq whose slot was released (set to None) after every registered consumer read it; -1 if none."""
+        return self._released_upto
+
+    def _register_consumer(self, consumer_name: str, local_seq: int) -> int:
+        """Pin the ring for this consumer before it first waits; return the seq it starts reading after.
+
+        A consumer asking to start behind the release watermark whose own pin is at or past the watermark
+        already consumed everything released below it (it crashed and restarted): it resumes at the watermark.
+        """
+        if not self._release_consumed_enabled:
+            return local_seq
+        with self._release_lock:
+            released = self._released_upto
+            pin = self._release_pins.get(consumer_name)
+            start = released if local_seq < released and pin is not None and pin >= released else local_seq
+            self._release_pins[consumer_name] = start
+        if start != local_seq:
+            logger.info(
+                "bus_consumer_rejoined_after_release",
+                consumer=consumer_name,
+                requested_start=local_seq,
+                start=start,
+            )
+        return start
+
+    def forget_consumer(self, consumer_name: str) -> None:
+        """Drop a consumer's release pin for good, so the release no longer waits for it.
+
+        For a consumer that is gone and will not restart; a closed consumer that may restart keeps its pin.
+        """
+        with self._release_lock:
+            self._release_pins.pop(consumer_name, None)
+
+    def _release_consumed(self, cursor: int) -> None:
+        """Drop the slots every registered consumer has already read, so refcounting frees their events.
+
+        Runs every `_release_every` publishes. With no pinned consumer nothing is released.
+        """
+        self._release_due_seq = cursor + self._release_every
+        with self._release_lock:
+            pins = self._release_pins
+            if not pins:
+                return
+            # A pinned consumer's pin only moves forward while it runs, so a value read just before it advances
+            # is lower than the truth: releasing less is safe, releasing more is impossible. A pin is inserted
+            # or removed under this lock, so a new consumer can never be passed by a release in flight.
+            target = min(pins.values())
+            released = self._released_upto
+            if target > cursor:
+                target = cursor
+            if target <= released:
+                return
+            # Only seqs newer than cursor - size still own their slot; an older one was overwritten.
+            first = released + 1
+            oldest = cursor - self.size + 1
+            if first < oldest:
+                first = oldest
+            self._released_upto = target
+            if first <= target:
+                self._clear_slots(first, target - first + 1)
+
+    def _clear_slots(self, first_seq: int, count: int) -> None:
+        """Set `count` consecutive ring slots, starting at `first_seq`'s, to None (count <= size)."""
+        buf = self.buffer
+        start = first_seq % self.size
+        head = self.size - start
+        if count <= head:
+            buf[start : start + count] = [None] * count
+        else:
+            buf[start:] = [None] * head
+            buf[: count - head] = [None] * (count - head)
+
+    def _gap_floor(self, current_cursor: int) -> int:
+        """Highest seq a consumer can no longer read: overwritten by the ring, or already released."""
+        floor = current_cursor - self.size
+        released = self._released_upto
+        if released > floor and released >= 0:
+            return released
+        return floor
+
+    def _account_overflow(self, consumer_name: str, lag: int, batch: bool) -> None:
+        """Count one lapped-consumer overflow: counters, rate window, log and the StormGuard HALT thresholds."""
+        self._telemetry.overflow_counter.inc()
+        self._overflow_count += 1  # legacy global
+        _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
+        self._overflow_count_per_consumer[consumer_name] = _consumer_ov
+        self._record_overflow_rate()
+        logger.error(
+            (
+                "CRITICAL: Consumer batch lagged too much, data loss occurred"
+                if batch
+                else "CRITICAL: Consumer lagged too much, data loss occurred"
+            ),
+            consumer=consumer_name,
+            lag=lag,
+            overflow_count=_consumer_ov,
+            threshold=self._overflow_halt_threshold,
+        )
+
+        # Trigger StormGuard HALT on repeated overflows (per-consumer)
+        if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
+            if batch:
+                halt_msg = f"EventBus batch overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
+                self._storm_guard.trigger_halt(halt_msg)
+                logger.critical("StormGuard HALT triggered due to EventBus batch overflow", consumer=consumer_name)
+            else:
+                halt_msg = f"EventBus overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
+                self._storm_guard.trigger_halt(halt_msg)
+                logger.critical("StormGuard HALT triggered due to EventBus overflow", consumer=consumer_name)
+
+    def _record_consumer_gap(
+        self,
+        consumer_name: str,
+        local_seq: int,
+        floor: int,
+        current_cursor: int,
+        lag_gauge: ConsumerLagSink,
+        batch: bool,
+        late_join: bool,
+    ) -> GapEvent:
+        """Account seqs (local_seq, floor] a consumer lost and return the GapEvent that reports them.
+
+        A late join (the consumer asked to start behind the release watermark, not lapped by the ring) is
+        reported by the GapEvent and gap counter only: it did not lag, so it is no overflow and no HALT input.
+        """
+        if late_join:
+            logger.warning(
+                "bus_consumer_joined_behind_release",
+                consumer=consumer_name,
+                requested_start=local_seq,
+                released_upto=floor,
+                missed_count=floor - local_seq,
+            )
+        else:
+            self._account_overflow(consumer_name, current_cursor - local_seq, batch)
+
+        # Inject GapEvent so downstream strategies can reset stale state
+        self._consumer_positions[consumer_name] = floor
+        if consumer_name in self._release_pins:
+            self._release_pins[consumer_name] = floor
+        lag_gauge.set(self.cursor - floor)
+        self._telemetry.gap_event_counter.inc()
+        return GapEvent(
+            missed_count=floor - local_seq,
+            first_missed_seq=local_seq + 1,
+            last_missed_seq=floor,
+            ts=timebase.now_ns(),
+        )
 
     def _publish_unlocked(self, event: Any) -> None:
         next_seq = self.cursor + 1
@@ -466,6 +640,8 @@ class RingBufferBus:
             self.buffer[next_seq % self.size] = event
         self.cursor = next_seq
         self._notify_counter += 1
+        if next_seq >= self._release_due_seq:
+            self._release_consumed(next_seq)
 
     def _bind_running_loop(self) -> None:
         """Remember the running loop and its thread; a no-op when called outside a running loop."""
@@ -591,8 +767,12 @@ class RingBufferBus:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
         lag_gauge = self._telemetry.bind_consumer(consumer_name)
+        pins = self._release_pins
 
         try:
+            # Before the first wait: a consumer that has not caught up yet must still hold back the release.
+            local_seq = self._register_consumer(consumer_name, local_seq)
+            joining = True
             while True:
                 # Wait for data
                 while self.cursor <= local_seq:
@@ -612,44 +792,19 @@ class RingBufferBus:
 
                 # Catch up batch
                 current_cursor = self.cursor
-                # Don't read more than size at once (buffer wrap protection for very slow consumer)
-                if current_cursor - local_seq > self.size:
-                    # Lagged too much, skip to latest - size
-                    self._telemetry.overflow_counter.inc()
-                    self._overflow_count += 1  # legacy global
-                    _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
-                    self._overflow_count_per_consumer[consumer_name] = _consumer_ov
-                    self._record_overflow_rate()
-                    lag = current_cursor - local_seq
-                    first_missed = local_seq + 1
-                    last_missed = current_cursor - self.size
-                    logger.error(
-                        "CRITICAL: Consumer lagged too much, data loss occurred",
-                        consumer=consumer_name,
-                        lag=lag,
-                        overflow_count=_consumer_ov,
-                        threshold=self._overflow_halt_threshold,
+                # Seqs up to the floor are gone: overwritten (consumer lagged a full ring, buffer wrap
+                # protection) or released (consumer joined behind the release watermark). Skip to it, loudly.
+                floor = self._gap_floor(current_cursor)
+                late_join = joining and local_seq >= current_cursor - self.size
+                joining = False
+                if local_seq < floor:
+                    gap_event = self._record_consumer_gap(
+                        consumer_name, local_seq, floor, current_cursor, lag_gauge, False, late_join
                     )
+                    local_seq = floor
+                    yield gap_event
 
-                    # Trigger StormGuard HALT on repeated overflows (per-consumer)
-                    if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
-                        halt_msg = f"EventBus overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
-                        self._storm_guard.trigger_halt(halt_msg)
-                        logger.critical("StormGuard HALT triggered due to EventBus overflow", consumer=consumer_name)
-
-                    local_seq = current_cursor - self.size
-
-                    # Inject GapEvent so downstream strategies can reset stale state
-                    self._consumer_positions[consumer_name] = local_seq
-                    lag_gauge.set(self.cursor - local_seq)
-                    self._telemetry.gap_event_counter.inc()
-                    yield GapEvent(
-                        missed_count=lag - self.size,
-                        first_missed_seq=first_missed,
-                        last_missed_seq=last_missed,
-                        ts=timebase.now_ns(),
-                    )
-
+                interrupted = False
                 while local_seq < current_cursor:
                     local_seq += 1
                     kind = self._kind_ring[local_seq % self.size] if self._kind_ring is not None else 0
@@ -665,10 +820,20 @@ class RingBufferBus:
                         event = self.buffer[local_seq % self.size]
                     if event is not None:
                         yield event
+                    elif kind == 0 and local_seq <= self._released_upto:
+                        # Released before this consumer read it (a second consumer registered under the same
+                        # name advanced the shared position). Step back: the next catch-up reports a gap.
+                        local_seq -= 1
+                        interrupted = True
+                        break
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
+                if consumer_name in pins:
+                    pins[consumer_name] = local_seq
                 lag_gauge.set(self.cursor - local_seq)
+                if interrupted:
+                    continue
 
                 # Successful catch-up with no overflow — reset per-consumer counter
                 if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
@@ -693,8 +858,11 @@ class RingBufferBus:
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
         lag_gauge = self._telemetry.bind_consumer(consumer_name)
+        pins = self._release_pins
 
         try:
+            local_seq = self._register_consumer(consumer_name, local_seq)  # before the first wait; see consume()
+            joining = True
             while True:
                 while self.cursor <= local_seq:
                     if my_signal is not None:
@@ -711,47 +879,19 @@ class RingBufferBus:
                             await asyncio.sleep(self._spin_sleep)
 
                 current_cursor = self.cursor
-                if current_cursor - local_seq > self.size:
-                    self._telemetry.overflow_counter.inc()
-                    self._overflow_count += 1  # legacy global
-                    _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
-                    self._overflow_count_per_consumer[consumer_name] = _consumer_ov
-                    self._record_overflow_rate()
-                    lag = current_cursor - local_seq
-                    first_missed = local_seq + 1
-                    last_missed = current_cursor - self.size
-                    logger.error(
-                        "CRITICAL: Consumer batch lagged too much, data loss occurred",
-                        consumer=consumer_name,
-                        lag=lag,
-                        overflow_count=_consumer_ov,
-                        threshold=self._overflow_halt_threshold,
+                floor = self._gap_floor(current_cursor)  # overwritten or released; see consume()
+                late_join = joining and local_seq >= current_cursor - self.size
+                joining = False
+                if local_seq < floor:
+                    gap_event = self._record_consumer_gap(
+                        consumer_name, local_seq, floor, current_cursor, lag_gauge, True, late_join
                     )
-
-                    if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
-                        halt_msg = (
-                            f"EventBus batch overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
-                        )
-                        self._storm_guard.trigger_halt(halt_msg)
-                        logger.critical(
-                            "StormGuard HALT triggered due to EventBus batch overflow", consumer=consumer_name
-                        )
-
-                    local_seq = current_cursor - self.size
-
+                    local_seq = floor
                     # Inject GapEvent into batch so downstream strategies can reset stale state
-                    self._consumer_positions[consumer_name] = local_seq
-                    lag_gauge.set(self.cursor - local_seq)
-                    self._telemetry.gap_event_counter.inc()
-                    gap_event = GapEvent(
-                        missed_count=lag - self.size,
-                        first_missed_seq=first_missed,
-                        last_missed_seq=last_missed,
-                        ts=timebase.now_ns(),
-                    )
                     yield [gap_event]
 
                 batch: List[Any] = []
+                interrupted = False
                 while local_seq < current_cursor and len(batch) < batch_size:
                     local_seq += 1
                     kind = self._kind_ring[local_seq % self.size] if self._kind_ring is not None else 0
@@ -767,13 +907,23 @@ class RingBufferBus:
                         event = self.buffer[local_seq % self.size]
                     if event is not None:
                         batch.append(event)
+                    elif kind == 0 and local_seq <= self._released_upto:
+                        # Released before this consumer read it; see consume(). The events already in
+                        # this batch go out first, then the next catch-up reports the gap.
+                        local_seq -= 1
+                        interrupted = True
+                        break
 
                 if batch:
                     yield batch
 
                 # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
+                if consumer_name in pins:
+                    pins[consumer_name] = local_seq
                 lag_gauge.set(self.cursor - local_seq)
+                if interrupted:
+                    continue
 
                 if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
                     self._overflow_count_per_consumer[consumer_name] = 0
