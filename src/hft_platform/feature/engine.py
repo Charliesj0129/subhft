@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 from structlog import get_logger
 
 from hft_platform.core.timebase import now_ns as _now_ns
@@ -22,6 +23,17 @@ def _safe_int_round(val: float, default: int = 0) -> int:
     if not math.isfinite(val):
         return default
     return int(round(val))
+
+
+def _l2_l5_qty(levels: np.ndarray, n_levels: int) -> tuple[float, float, float, float]:
+    """Return the level 2-5 quantities of an int64 (N, 2) book side, 0.0 for absent levels."""
+    # Scalar indexing avoids a temporary ndarray view and two quantity lists.
+    return (
+        float(levels[1, 1]) if n_levels > 1 else 0.0,
+        float(levels[2, 1]) if n_levels > 2 else 0.0,
+        float(levels[3, 1]) if n_levels > 3 else 0.0,
+        float(levels[4, 1]) if n_levels > 4 else 0.0,
+    )
 
 
 class _StatsTupleProxy:
@@ -82,6 +94,8 @@ def _top_qty(side: Any) -> int | None:
     if side is None:
         return None
     try:
+        if isinstance(side, np.ndarray) and side.ndim == 2 and side.shape[1] > 1:
+            return int(side[0, 1]) if side.size > 0 else 0
         if hasattr(side, "size"):
             # numpy path
             if int(getattr(side, "size", 0)) <= 0:
@@ -132,6 +146,7 @@ class _LobKernelState:
     ret_buf: list[int] = field(default_factory=lambda: [0] * _RET_AUTOCOV_WINDOW)  # pre-allocated ring buffer
     ret_buf_pos: int = 0  # write position in ring buffer
     ret_buf_count: int = 0  # number of valid entries
+    ret_autocov_sum: int = 0  # exact sum of adjacent return products in ret_buf
     prev_mid_price_x2: int = 0  # previous mid_price_x2 for delta
     # TOB survival: timestamp of last best price change
     last_tob_change_ns: int = 0
@@ -871,24 +886,24 @@ class FeatureEngine:
         ret = mid_price_x2 - ks.prev_mid_price_x2 if ks.prev_mid_price_x2 != 0 else 0
         buf = ks.ret_buf
         pos = ks.ret_buf_pos
-        buf[pos] = ret
-        ks.ret_buf_pos = (pos + 1) % _RET_AUTOCOV_WINDOW
-        if ks.ret_buf_count < _RET_AUTOCOV_WINDOW:
-            ks.ret_buf_count += 1
         count = ks.ret_buf_count
+        # Keep the adjacent-product sum in O(1): remove the outgoing oldest
+        # pair, then add the newest pair. Python ints preserve the exact sum
+        # of the original window scan, including products beyond int64.
+        autocov_sum = ks.ret_autocov_sum
+        if count == _RET_AUTOCOV_WINDOW:
+            autocov_sum -= buf[pos] * buf[(pos + 1) % _RET_AUTOCOV_WINDOW]
+        if count > 0:
+            autocov_sum += buf[(pos - 1) % _RET_AUTOCOV_WINDOW] * ret
+        buf[pos] = ret
+        ks.ret_autocov_sum = autocov_sum
+        ks.ret_buf_pos = (pos + 1) % _RET_AUTOCOV_WINDOW
+        if count < _RET_AUTOCOV_WINDOW:
+            count += 1
+            ks.ret_buf_count = count
         ret_autocov_5s_x1e6 = 0
         if count >= 3:
-            autocov_sum = 0
-            n_pairs = 0
-            # oldest valid entry is at (pos - count + 1) % W
-            oldest = pos - count + 1
-            for i in range(1, count):
-                idx_curr = (oldest + i) % _RET_AUTOCOV_WINDOW
-                idx_prev = (oldest + i - 1) % _RET_AUTOCOV_WINDOW
-                autocov_sum += buf[idx_curr] * buf[idx_prev]
-                n_pairs += 1
-            if n_pairs > 0:
-                ret_autocov_5s_x1e6 = int(round(float(autocov_sum) * 1_000_000.0 / float(n_pairs)))
+            ret_autocov_5s_x1e6 = int(round(float(autocov_sum) * 1_000_000.0 / float(count - 1)))
         ks.prev_mid_price_x2 = mid_price_x2
 
         # [18] tob_survival_ms: ms since last best price change
@@ -979,7 +994,10 @@ class FeatureEngine:
         if event is not None:
             bids = getattr(event, "bids", None)
             asks = getattr(event, "asks", None)
-            if bids is not None:
+            if isinstance(bids, np.ndarray) and bids.ndim == 2 and bids.shape[1] > 1 and bids.dtype.kind in "iu":
+                n_bid_levels = min(len(bids), 5)
+                cb2, cb3, cb4, cb5 = _l2_l5_qty(bids, n_bid_levels)
+            elif bids is not None:
                 try:
                     n_bid_levels = min(len(bids), 5)
                     if n_bid_levels > 1:
@@ -996,7 +1014,10 @@ class FeatureEngine:
                     # corrupted depth shows up in metrics.
                     self._l5_clear_error_count += 1
                     self._log_l5_clear_error("bid", _exc)
-            if asks is not None:
+            if isinstance(asks, np.ndarray) and asks.ndim == 2 and asks.shape[1] > 1 and asks.dtype.kind in "iu":
+                n_ask_levels = min(len(asks), 5)
+                ca2, ca3, ca4, ca5 = _l2_l5_qty(asks, n_ask_levels)
+            elif asks is not None:
                 try:
                     n_ask_levels = min(len(asks), 5)
                     if n_ask_levels > 1:

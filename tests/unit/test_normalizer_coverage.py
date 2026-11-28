@@ -425,7 +425,8 @@ class TestNormalizeBidAskReturnTuple:
         assert isinstance(result, tuple)
         assert result[0] == "bidask"
         assert result[1] == "2330"
-        assert result[2:4] == ([[1000000, 10], [995000, 5]], [[1005000, 8], [1010000, 3]])
+        assert result[2].tolist() == [[1000000, 10], [995000, 5]]
+        assert result[3].tolist() == [[1005000, 8], [1010000, 3]]
 
     def test_return_tuple_without_stats(self, normalizer, monkeypatch):
         """Returns the six-field bid/ask tuple."""

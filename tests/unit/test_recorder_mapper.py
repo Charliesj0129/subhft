@@ -1,6 +1,9 @@
+import numpy as np
+
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
 from hft_platform.events import BidAskEvent, MetaData, TickEvent
 from hft_platform.feed_adapter.normalizer import SymbolMetadata
+from hft_platform.recorder import mapper as mapper_mod
 from hft_platform.recorder.mapper import map_event_to_record
 
 
@@ -61,6 +64,30 @@ def test_map_bidask_non_snapshot_dict_levels(tmp_path):
     assert row["type"] == "BidAsk"
     assert row["bids_price"] == [1_000_000]
     assert row["asks_price"] == [1_100_000]
+
+
+def test_map_bidask_ndarray_levels_use_direct_scale_path(tmp_path, monkeypatch):
+    """int64 ndarray book levels map without the descale fallback and match list levels."""
+    metadata = _metadata(tmp_path)
+
+    def _fail_descale(*args, **kwargs):
+        raise AssertionError("np.int64 level price fell through to _descale")
+
+    meta = MetaData(seq=3, topic="bidask", source_ts=12, local_ts=22)
+    list_event = BidAskEvent(meta=meta, symbol="AAA", bids=[[1000005, 1], [999995, 4]], asks=[[1000015, 2]])
+    _, list_row = map_event_to_record(list_event, metadata)
+    monkeypatch.setattr(mapper_mod, "_descale", _fail_descale)
+    np_event = BidAskEvent(
+        meta=meta,
+        symbol="AAA",
+        bids=np.array([[1000005, 1], [999995, 4]], dtype=np.int64),
+        asks=np.array([[1000015, 2]], dtype=np.int64),
+    )
+    _, np_row = map_event_to_record(np_event, metadata)
+    for key in ("bids_price", "bids_vol", "asks_price", "asks_vol"):
+        assert np_row[key] == list_row[key]
+        assert all(type(v) is int for v in np_row[key])
+    assert np_row["bids_price"] == [100_000_500, 99_999_500]
 
 
 def test_map_order_and_fill(tmp_path):

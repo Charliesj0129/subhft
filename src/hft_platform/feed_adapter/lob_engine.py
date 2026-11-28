@@ -31,6 +31,29 @@ _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
 _FORCE_NUMPY = os.getenv("HFT_LOB_FORCE_NUMPY", "1").lower() not in {"0", "false", "no", "off"}
 
 
+def _depth_total(levels: np.ndarray) -> int:
+    """Sum a nonempty int64 top-five side without a temporary column view.
+
+    Wider books and other dtypes retain numpy's reduction rules. Explicit
+    signed wrapping preserves numpy int64 sum overflow on the scalar path.
+    """
+    n = len(levels)
+    if n > 5 or levels.dtype != np.int64:
+        return int(levels[:, 1].sum())
+    total = int(levels[0, 1])
+    if n > 1:
+        total += int(levels[1, 1])
+    if n > 2:
+        total += int(levels[2, 1])
+    if n > 3:
+        total += int(levels[3, 1])
+    if n > 4:
+        total += int(levels[4, 1])
+    if total > 0x7FFFFFFFFFFFFFFF or total < -0x8000000000000000:
+        total = ((total + 0x8000000000000000) & 0xFFFFFFFFFFFFFFFF) - 0x8000000000000000
+    return total
+
+
 class _NoopLock:
     __slots__ = ()
 
@@ -150,7 +173,7 @@ class BookState:
         # 1. Depth (Pure Python Sum)
         if isinstance(self.bids, np.ndarray):
             if self.bids.size > 0:
-                self.bid_depth_total = int(self.bids[:, 1].sum())
+                self.bid_depth_total = _depth_total(self.bids)
                 best_bid = int(self.bids[0, 0])
                 bid_vol_top = int(self.bids[0, 1])
             else:
@@ -168,7 +191,7 @@ class BookState:
 
         if isinstance(self.asks, np.ndarray):
             if self.asks.size > 0:
-                self.ask_depth_total = int(self.asks[:, 1].sum())
+                self.ask_depth_total = _depth_total(self.asks)
                 best_ask = int(self.asks[0, 0])
                 ask_vol_top = int(self.asks[0, 1])
             else:

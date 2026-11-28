@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import gc
 import json
 import os
 import time
+import weakref
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2527,7 +2529,7 @@ class TestPeriodicGen2GC:
     """``gc.collect(2)`` runs synchronously on the event loop and holds the GIL,
     so its cadence is a latency decision, not just a memory one."""
 
-    async def _drive_ticks(self, sys_obj, ticks: int) -> list[int]:
+    async def _drive_ticks(self, sys_obj, ticks: int, collect_callback=None) -> list[int]:
         """Run the supervisor for ``ticks`` iterations; return the generations collected."""
         collected: list[int] = []
         iteration = 0
@@ -2540,10 +2542,16 @@ class TestPeriodicGen2GC:
 
         def _record_collect(generation):
             collected.append(generation)
-            return 0  # the caller compares the result to 100; None would raise
+            return collect_callback(generation) if collect_callback else 0
+
+        async def _run_executor(_pool, function, *args):
+            return function(*args)
 
         mock_metrics = MagicMock()
         mock_metrics.cap_symbol = MagicMock(return_value="X")
+        self.gc_children = {generation: MagicMock() for generation in (0, 2)}
+        mock_metrics.pipeline_latency_ns.labels.side_effect = lambda *, stage: self.gc_children[int(stage[-1])]
+        self.gc_metrics = mock_metrics
 
         with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
             MockMR.get.return_value = mock_metrics
@@ -2552,9 +2560,93 @@ class TestPeriodicGen2GC:
                     with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                         with patch.object(sys_obj, "_update_platform_degrade_state"):
                             with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                                # GC cadence does not depend on disk IO or worker threads.
+                                with (
+                                    patch("hft_platform.services.system.write_heartbeat"),
+                                    patch.object(sys_obj, "_sync_manual_latches", new=AsyncMock()),
+                                    patch.object(sys_obj, "_sync_operator_flatten", new=AsyncMock()),
+                                    patch.object(asyncio.get_running_loop(), "run_in_executor", _run_executor),
+                                ):
+                                    await asyncio.wait_for(sys_obj._supervise(), timeout=5)
         return collected
+
+    @pytest.mark.asyncio
+    async def test_gen0_gc_drains_young_objects_every_default_tick(self, monkeypatch):
+        monkeypatch.setenv("HFT_GC_DISABLE_TRADING", "1")
+        monkeypatch.delenv("HFT_GC_GEN0_INTERVAL_TICKS", raising=False)
+        collected = await self._drive_ticks(_make_stub(running=True), 3)
+        assert collected == [0, 0, 0]
+
+    @pytest.mark.asyncio
+    async def test_gen0_gc_respects_explicit_batch_interval(self, monkeypatch):
+        monkeypatch.setenv("HFT_GC_DISABLE_TRADING", "1")
+        monkeypatch.setenv("HFT_GC_GEN0_INTERVAL_TICKS", "10")
+        collected = await self._drive_ticks(_make_stub(running=True), 25)
+        assert collected == [0, 0]
+
+    @pytest.mark.asyncio
+    async def test_gen2_gc_subsumes_young_scan_on_same_tick(self, monkeypatch):
+        monkeypatch.setenv("HFT_GC_DISABLE_TRADING", "1")
+        monkeypatch.setenv("HFT_GC_GEN0_INTERVAL_TICKS", "10")
+        monkeypatch.setenv("HFT_GC_GEN2_INTERVAL_TICKS", "60")
+        collected = await self._drive_ticks(_make_stub(running=True), 60)
+        assert collected == [0] * 5 + [2]
+
+    @pytest.mark.asyncio
+    async def test_gen2_gc_preserves_reclamation_when_young_gc_disabled(self, monkeypatch):
+        monkeypatch.setenv("HFT_GC_DISABLE_TRADING", "1")
+        monkeypatch.setenv("HFT_GC_GEN0_PERIODIC", "0")
+        monkeypatch.setenv("HFT_GC_GEN2_INTERVAL_TICKS", "60")
+        collected = await self._drive_ticks(_make_stub(running=True), 60)
+        assert collected == [2]
+
+    @pytest.mark.asyncio
+    async def test_gc_schedule_keeps_automatic_mode_untouched(self, monkeypatch):
+        monkeypatch.setenv("HFT_GC_DISABLE_TRADING", "0")
+        collected = await self._drive_ticks(_make_stub(running=True), 60)
+        assert collected == []
+        self.gc_metrics.pipeline_latency_ns.labels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_gc_pause_records_monotonic_duration_for_each_collection(self, monkeypatch):
+        monkeypatch.setenv("HFT_GC_DISABLE_TRADING", "1")
+        monkeypatch.setenv("HFT_GC_GEN0_INTERVAL_TICKS", "1")
+        monkeypatch.setattr("hft_platform.services.system.time.perf_counter_ns", iter([1000, 4500]).__next__)
+        with patch("hft_platform.services.system.logger") as log:
+            collected = await self._drive_ticks(_make_stub(running=True), 1)
+        assert collected == [0]
+        assert [entry.kwargs for entry in self.gc_metrics.pipeline_latency_ns.labels.call_args_list] == [
+            {"stage": "gc_gen0"},
+            {"stage": "gc_gen2"},
+        ]
+        self.gc_children[0].observe.assert_called_once_with(3500)
+        self.gc_children[2].observe.assert_not_called()
+        log.debug.assert_any_call("gc_gen0_periodic", collected=0, duration_ms=0.004)
+
+    @pytest.mark.asyncio
+    async def test_gen2_gc_reclaims_unreachable_promoted_runtime_cycle(self, monkeypatch):
+        class Cycle:
+            pass
+
+        real_collect = gc.collect
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            cycle = Cycle()
+            cycle.peer = cycle
+            reference = weakref.ref(cycle)
+            real_collect(2)
+            del cycle
+            monkeypatch.setenv("HFT_GC_DISABLE_TRADING", "1")
+            monkeypatch.setenv("HFT_GC_GEN2_INTERVAL_TICKS", "60")
+            await self._drive_ticks(_make_stub(running=True), 59, real_collect)
+            assert reference() is not None
+            collected = await self._drive_ticks(_make_stub(running=True), 60, real_collect)
+            assert collected[-1] == 2
+            assert reference() is None
+        finally:
+            if was_enabled:
+                gc.enable()
 
     @pytest.mark.asyncio
     async def test_gen2_gc_does_not_run_at_the_old_five_minute_cadence(self):
@@ -2575,7 +2667,7 @@ class TestPeriodicGen2GC:
         finally:
             os.environ.pop("HFT_GC_DISABLE_TRADING", None)
 
-        # Positive control first. gen-0 and gen-2 share one enable gate, so
+        # Positive control first. Both use HFT_GC_DISABLE_TRADING, so
         # "no gen-2 ran" is indistinguishable from "the whole block was off"
         # without this — and an assertion that cannot fail proves nothing.
         assert 0 in collected, "periodic GC was disabled outright; the gen-2 assertion below would be vacuous"

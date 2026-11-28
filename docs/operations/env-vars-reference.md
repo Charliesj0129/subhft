@@ -33,6 +33,9 @@ Base YAML (config/base/main.yaml)
 | `HFT_KILL_LEDGER_ENABLED` | `1` | `1` 時 `promote_alpha()` 會在 Gate-C 拋例外或 Gate-D 拒絕時寫入 `audit.alpha_kill_ledger`；設 `0` 可關閉自動寫入（除錯 / operator dry-run） |
 | `HFT_ALPHA_KILL_LEDGER_PATH` | `research/alphas/_kill_ledger.jsonl` | 覆寫離線 kill-ledger jsonl sink 路徑（測試用；生產環境不應設定） |
 | `HFT_BUS_BATCH_SIZE` | `0` | >1 時使用 batch consumer，減少事件迴圈喚醒次數 |
+| `HFT_BUS_RELEASE_CONSUMED` | `1` | `1` = `RingBufferBus` 每 `HFT_BUS_RELEASE_EVERY` 次 publish，把所有已註冊 consumer 都讀過的 ring slot 設為 `None`，讓 refcount 立即釋放事件（否則 65,536 格 ring 會把已消費事件留在 GC 老世代，拉長 gen2 暫停）。釋放以 consumer 名稱的 pin 為準：沒有任何 pin 時不釋放；consumer 的 generator 關閉（崩潰）後 pin 仍保留，重啟的同名 consumer 不會漏掉事件（死掉的 consumer 與舊行為一樣讓 ring 保留事件），永久退場的 consumer 需呼叫 `bus.forget_consumer(name)` 才會移除 pin；尚未啟動的 consumer 可先呼叫 `bus.reserve_consumer(name, start_seq)` 預留 pin（已有 pin 時不移動它、回傳 `False`；釋放關閉時為 no-op）——`HFT_MD_RECORD_DIRECT=0` 時系統會在 market data 開始發布前為 `recorder_bridge` 預留 `-1`，否則它在 await 之後才加入，會被 strategy runner 推進的釋放超車而遺失啟動事件；預留後從未啟動的 consumer 會像舊 ring 一樣擋住釋放，需 `forget_consumer`。`0` / `false` / `no` / `off` = 完全關閉（維持舊行為：ring 保留最近 `size` 筆）。`start_cursor` 落在已釋放範圍的 consumer：同名 consumer 自己的 pin 已涵蓋被釋放的範圍（崩潰重啟）時，靜默從 `released_upto` 續讀（記錄 `bus_consumer_rejoined_after_release`，不發 `GapEvent`、不計 overflow）；從未出現過的名稱（遲到加入）會收到 `GapEvent` 並只計入 gap 指標（不計 overflow / HALT）。ring 被覆寫造成的 overflow 計法不變；公開唯讀屬性 `bus.released_upto` 為已釋放的最高 seq（`-1` = 尚未釋放） |
+| `HFT_BUS_RELEASE_EVERY` | `256` | 釋放已消費 slot 的間隔（以 publish 次數計，下限 1）；僅在 `HFT_BUS_RELEASE_CONSUMED` 開啟時有效。釋放在該次 publish 的 wakeup（`_notify`）之後才執行，不會延遲觸發它的事件 |
+| `HFT_BUS_RELEASE_MAX_SLOTS` | `2 × HFT_BUS_RELEASE_EVERY`（預設 `512`） | 單次釋放最多清除的 slot 數（下限 2）。consumer 一次追上 k 筆 backlog 時，不會在單次 publish 內同步釋放 k 筆（k = 60,000 約 13 ms），而是每次最多清除此數量，剩餘部分在下一次 publish 繼續（`released_upto` 只推進到實際已清除處），backlog 清完後恢復每 `HFT_BUS_RELEASE_EVERY` 次一次的節奏；backlog 最多 `size` 筆，單筆 publish 時最多 `ceil(size / (max_slots - 1))` 次 publish 內排空（批次 publish 一次檢查一次，每批最多清除此數量）。單次釋放耗時約與此值成正比（512 實測約 100-200 µs，最差單次 0.46 ms）；僅在 `HFT_BUS_RELEASE_CONSUMED` 開啟時有效 |
 | `HFT_BROKER` | `shioaji` | Broker 後端選擇：`shioaji` / `fubon` |
 | `HFT_SDK_STDOUT` | `devnull` | `python -m hft_platform.main` 與 `hft run`（含 `python -m hft_platform run`，即 Dockerfile CMD）啟動時把 fd 1 指向 `/dev/null`（`hft run --mode replay` 不經此路徑）。Shioaji 原生核心會把 session 事件（內含登入身分證字號）直接印到 stdout，繞過 structlog 的遮蔽；engine 自己的 log 走 stderr。`inherit` = 保留 stdout（只在本機除錯用）；其他值一律當 `devnull` |
 | `SYMBOLS_CONFIG` | `config/symbols.yaml` | 交易標的設定檔路徑 |
@@ -48,6 +51,25 @@ Base YAML (config/base/main.yaml)
 | `HFT_TASK_RESTART_BACKOFF_MAX_S` | `30.0` | 重啟等待上限（秒） | 不建議超過 60s |
 | `HFT_SUPERVISOR_QUEUE_LOG_EVERY_S` | `30.0` | queue 深度日誌記錄頻率 | 除錯時縮短至 5s |
 | `HFT_MTM_INCOMPLETE_REPEAT_TICKS` | `3600` | mark-to-market 無法定價時，重覆提醒之間的 supervisor tick 數（1 Hz，故預設為每小時一次）；進入、標的變動、恢復三個邊緣一律立即記錄 | `0` = 只記錄邊緣，不重覆提醒 |
+| `HFT_GC_DISABLE_TRADING` | `0` | `1` = 啟動服務後停用自動 GC，改由 supervisor 明確回收；離開 run 時重新啟用 | 保持預設可使用 Python 自動 GC；手動模式仍保留完整 gen2 回收 |
+| `HFT_GC_GEN0_PERIODIC` | `1` | 手動 GC 模式下啟用年輕代回收；`0` 不會停用 gen2 回收 | 關閉會累積更多年輕物件，增加完整回收成本 |
+| `HFT_GC_GEN0_INTERVAL_TICKS` | `1` | 年輕代回收間隔，最小 1 個 supervisor tick | 舊預設 10 會批次掃描更多物件；每 tick 回收可降低年輕代停頓 |
+| `HFT_GC_GEN2_INTERVAL_TICKS` | `3600` | 完整回收間隔，最小 60 個 supervisor tick；同 tick 到期時只執行 gen2 | 保留 24/7 舊循環參照回收；完整掃描仍可能造成長停頓 |
+
+GC 間隔以 supervisor 完成的 tick 計數（目標 1 Hz），不是硬性牆鐘期限。
+每次明確回收的耗時記錄於 `pipeline_latency_ns{stage="gc_gen0"}` 或
+`pipeline_latency_ns{stage="gc_gen2"}`，標籤在 supervisor 進入迴圈前建立；
+每次另記錄 `gc_gen0_periodic` / `gc_gen2_periodic` 日誌（一般為 debug，
+超過 5 ms 或回收超過 100 個物件為 info）。GC 在事件迴圈同步執行並持有 GIL，
+因此 executor 無法消除停頓。沒有使用 `gc.freeze()`：它會凍結所有已追蹤物件，
+包含仍會變動的啟動期圖形，讓之後失去根參照的凍結循環無法被 gen2 回收；
+週期性解凍會恢復完整掃描成本，再凍結則可能納入更多執行期循環。
+
+`scripts/latency/gc_schedule_bench.py` 可在獨立程序比較一小時模擬政策。
+每 tick gen0 的效益限於年輕代停頓；完整 gen2 的最長停頓仍須依實際 heap 驗證，
+不能由較低的年輕代 p99 推論。gen1 掃描會把存活物件晉升至 gen2，不能取代完整回收。
+若實測顯示大量舊循環累積，可用既有 `HFT_GC_GEN2_INTERVAL_TICKS=60` 縮短回收間隔；
+這會從每小時約 1 次完整停頓增加至約 60 次，不能保證降低由存活圖形主導的停頓。
 
 **Runbook 參考**: [Section 9 — Supervisor restart](../runbooks.md#9-service-task-crash-supervisor-restart)
 
