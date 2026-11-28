@@ -368,11 +368,11 @@ tests:
   # THESHOW 2026-11-02: the boot roll failed on a partial contract cache and
   # the pool ran on config/symbols.yaml all night. Positive controls are that
   # shape; negative controls are a roll that keeps validating.
-  - interval: 10m
+  - interval: 1m
     name: universe-roll-not-validating fires when no rebuild ever passed
     input_series:
       - series: "hft_quote_pool_universe_last_valid_timestamp_seconds"
-        values: "0x80"
+        values: "0x800"
     alert_rule_test:
       - eval_time: 700m
         alertname: UniverseRollNotValidating
@@ -392,11 +392,13 @@ tests:
                 universe_roll_build_failed / universe_roll_refused log lines.
               runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
-  - interval: 10m
+  - interval: 1m
     name: universe-roll-not-validating stays quiet while the roll validates every 10m
     input_series:
+      # One sample per minute: a 10m step leaves gaps longer than the 5m lookback,
+      # and an absent series resets the for: timer, so the test proved nothing.
       - series: "hft_quote_pool_universe_last_valid_timestamp_seconds"
-        values: "0+600x80"
+        values: "0+60x800"
     alert_rule_test:
       - eval_time: 790m
         alertname: UniverseRollNotValidating
